@@ -9,8 +9,8 @@
 - **C. 我们独有 (mine-only)** —— 官方没有；候选向上游提 PR 的列表
 
 > ⚠ 文档维护：每次改 backplane 或者 upstream 升级导致差异变化时，
-> 更新对应表格的"对齐状态"列 + 末尾的 **变更日志** section。
-> 字段名拼写以代码为准，不要从对话/PR 描述里抄。
+> 更新对应表格的"对齐状态"列即可。决策演进通过 git log 看，
+> 不在文档里维护变更日志。字段名拼写以代码为准，不要从对话/PR 描述里抄。
 
 ## 来源 / 真实数据点
 
@@ -257,31 +257,11 @@ grep -nE '^@app\.(get|post|put|delete|patch|websocket)' \
 | 跨 profile 写操作的并发风险 | `_call_for_profile` 在 `cron.jobs` 模块全局变量上做 swap+restore，对外部 `hermes cron run` 进程是 process-isolated 无影响；但同进程下如果有 in-process 调度（罕见）可能在 swap 窗口内瞬间读到错路径。Upstream `hermes_cli/web_server.py` 也有同样模式，已默认接受 | `GET/POST/PUT/DELETE /hermes/cron/jobs{,/{id},...}` | 不可避（要彻底安全得绕开 cron.jobs 直接读 jobs.json，舍弃 normalize/lock）|
 | `getHermesModelCatalog` TS 类型 | 仓库 `hermes-my-browser-extension` 里 `HermesModelCatalogResponse` 仍是旧 `{providers (dict), catalog_source, ...}`，新 wire shape 是 upstream `{providers (list), model, provider}` | 跨仓库，UI 消费层 | 中（UI 重写消费代码 + 类型） |
 
----
-
-## §E. 变更日志（append-only）
-
-格式：日期 / 改动概述 / 影响表格 / 提交（如有）。
-
-| 日期 | 改动 | 影响 | 提交 |
-|---|---|---|---|
-| 2026-05-25 | 首次建表；A 类 16 端点完成 path/method/payload 对齐（保留 mine-only additive）；删 `config_routes.py`，model 路由合并到 `model_routes.py`；skill bundle meta 拆出 `/hermes/skills/meta` | §A 全部，§C `skills/meta` 新增 | （未提交）|
-| 2026-05-25 | cron `_clean_job` 增 4 字段 (`profile` / `profile_name` / `hermes_home` / `is_default_profile`)；cron list / get 从 ⚠ 升 ➕；cron update 标 🔒（intentional：白名单比 upstream 严格更安全）；§D 删掉已解决的 cron annotation 与 skill description/category 两条；§D 新增 `getHermesModelCatalog` TS 类型迁移项；确认 `_find_all_skills` 仅 `name`/`description`/`category` 三字段，我们是严格超集 | §A cron 4 行，§D 替换 | （未提交）|
-| 2026-05-25 | 清掉 `cron/service.py` 里 `<!-- hermes-inbox-protocol-v1 -->` legacy 包袱：删 `_LEGACY_INBOX_PROTOCOL_MARKER` / 正则 / `_strip_legacy_inbox_protocol` / `_migrate_strip_legacy_protocol` / migration flag 文件路径与状态变量、`_clean_job` 中的 marker-strip 步骤、create/update 中的 defensive strip 调用、4 个 CRUD 入口的 `_migrate_strip_legacy_protocol()` 触发；同时清掉未用的 `import re` 和 `List` 导入；服务文件由 490 → 337 行。`_normalise_deliver`（`deliver="inbox"`→`"local"` 别名）保留 —— 另一桩 legacy concern，没动 | §A 文档备注（cron list/get 删 prompt 清洗行为说明） | （未提交） |
-| 2026-05-25 | 整理 §A 备注列约定（不写纯 wire shape；只放非显然语义 / 不对齐理由 / 跨段引用 / 历史记录）；据此清掉 sessions 详情·消息流·删除 / cron delete·pause·resume·trigger / skills toggle 共 8 个冗余备注。`DELETE /hermes/sessions/{id}` 砍掉 mine-only `session_id` 字段（实际消费方 `store.ts:dropMessages` 只读 `ok`，没人用过该字段），状态从 ➕ 升 ✅；同步 extension 端 `DeleteSessionResponse` 类型与 `deleteHermesSession` 实现 | §A 行级备注；后端 `sessions/service.py:delete_session_response`；前端 `hermes-sessions.ts` | （未提交） |
-| 2026-05-25 | 全 ➕ 字段消费方实测：`model/info` 砍 `config_path`/`config_exists`/`error`（仅死代码 wrapper 读）；`model/auxiliary` 砍 per-task `api_key` + 顶层 `config_path`/`config_exists`/`error`（全部 0 UI 消费，aux 状态 ➕→✅）；`model/set` 砍 `api_key` 入参（0 callers）；后端 `_AUX_SLOT_FIELDS` 同步去掉 `api_key`、`write_auxiliary_slot` 签名去掉 `api_key=`；前端 `hermes-agent-model.ts` 删 deprecated `getHermesAgentMainModel()` 死代码、`AuxiliaryTask.api_key` 字段、`AuxiliaryModelsResponse.config_path/config_exists`、`setHermesAuxiliarySlot` 的 `base_url/api_key` 参数；统计：✅ 8→9, ➕ 8→7 | §A 3 行 + 快速统计；后端 `adapters/hermes_agent_model.py`、`settings/model_config_service.py`、`settings/model_routes.py`；前端 `hermes-agent-model.ts` | （未提交） |
-| 2026-05-25 | A 类剩余偏差对齐：cron PUT 砍 `_UPDATABLE_FIELDS` 白名单（🔒→✅），body 严格 `{updates:{...}}`；cron list/get/create/update/pause/resume/trigger/delete 全部接 `?profile=` 参数，新 `_call_for_profile` 镜像 upstream `_call_cron_for_profile` 模式（cron list/get ➕→✅）；model/info handler post-strip `base_url`（adapter 保留给 main-provider-settings；➕→✅）；model/set 砍 `base_url` 入参（➕→✅），extension `setHermesAgentMainModel` 内部改走 `saveHermesMainProviderSettings` 保持 `base_url:null` 清除流程；model/options 砍本地 catalog fallback（⚠→✅）helper 不可用时返 501；删 `model_catalog_service.build_model_catalog_response`（仅 fallback 用过）；extension cron update body wrap 成 `{updates}`；统计 ✅ 9→13，➕ 7→3（剩 sessions list 查询参数 / cron create 11 body 字段 / skills list 8 per-item 字段），🔒 1→0 | §A 7 行；§D 删 `?profile=` out-of-scope 项 改成"并发风险说明"；后端 `cron/service.py`、`cron/routes.py`、`settings/model_routes.py`、`settings/model_catalog_service.py`；前端 `hermes-cron.ts`、`hermes-agent-model.ts` | （未提交） |
-| 2026-05-25 | skills 严格对齐：`GET /hermes/skills` 砍 8 个 per-item 富字段（➕→✅），仅保留 upstream 的 `name`/`description`/`category`/`enabled`；扩展 `GET /hermes/skills/meta` 增加 `items[]`（包含原来的 `path`/`origin`/`platforms`/`version`/`tags`/`created_at`/`updated_at`/`timestamp_source` + 已有的 bundle 统计），meta 路径保持 mine-only；extension `getHermesSkills` 并行 fetch 两边后按 `name` join，对外 `HermesSkillEntry` 类型不变，SettingsSkills UI 0 修改；统计 ✅ 13→14，➕ 3→2 | §A skills 行；§C skills/meta 备注；后端 `settings/skills_routes.py`；前端 `hermes-skills.ts` | （未提交） |
-| 2026-05-25 | `PUT /hermes/cron/jobs/{id}` 收尾对齐：删 `update_job_response` 里"empty updates 拒绝"和 `_normalise_deliver` 两处 upstream 没有的额外行为，body 真正一字不差透给 `cron.jobs.update_job` —— mine-only 行为彻底清零，备注列从"body 严格 + 白名单已移除"简化为 `—` | §A cron 更新行；后端 `cron/service.py:update_job_response` | （未提交） |
-| 2026-05-25 | mine-only cron 端点小整理：`GET /hermes/cron/output/index` 改名 `GET /hermes/cron/runs`（"runs" 跟 "jobs" 同级名词，"index" 命名意图模糊）；删 `GET /hermes/cron/output/{job_id}/{run_id}` —— extension 端 `getCronRun` 0 consumer，list 已经返回 body 没有单读必要；后端同步删 `output_service.get_run`、`handle_output_detail`、`cron/__init__.py` 的 `get_run` 导出；前端 `lib/cron-runs/client.ts` 改 URL + 删 `getCronRun` 函数；`POST /hermes/cron/parse-schedule` 保留（无更好替代：client-side 重写 schedule DSL parser 维护成本高，提交时才校验 UX 退化） | §C cron 增强项；后端 `cron/routes.py`、`output_service.py`、`__init__.py`；前端 `cron-runs/client.ts` | （未提交） |
-| 2026-05-25 | 删 `POST /hermes/cron/parse-schedule` —— 此前留作 schedule 字符串可读性预览，但 owner 判断"纯 UX 糖，不值得为它维护一个 backend endpoint"。后端删 `handle_parse_schedule` + 路由 + `service.parse_schedule_preview` + `cron/__init__.py` 导出；前端删 `previewHermesCronSchedule` + `HermesCronParsePreviewResponse` + `useSchedulePreview` hook + `SchedulePreview` 组件 + `SettingsCron.tsx` 中两处使用；表单仍有 placeholder 字符串提示用户支持的格式（cron / `every Xm` / 时长 / ISO），提交时 Hermes core 会正常校验。前一条 changelog 里"保留 parse-schedule"的判断被本次推翻 | §C cron 增强项缩到 1 行；后端 `cron/routes.py`、`cron/service.py`、`cron/__init__.py`；前端 `lib/hermes-cron.ts`、`options/SettingsCron.tsx` | （未提交） |
-| 2026-05-25 | 删 `POST /hermes/sessions/{id}/regenerate-title` —— extension 全仓 `grep regenerate-title / regenerateTitle / regenerateHermesTitle` 0 hit，upstream 也无对等。后端删 `handle_regenerate_title` + 路由 + `service.regenerate_title_response`（~70 行）+ routes.py 的 import；保留 service 里的 auto-title path（`_spawn_auto_title` / `_maybe_trigger_auto_title` / `_AUTO_TITLE_USER_MSG_LIMIT` / `_content_to_text`），那条是 append_message 异步触发的，仍在用 | §C 会话写入项 4→3；后端 `sessions/routes.py`、`sessions/service.py` | （未提交） |
-| 2026-05-25 | 补全 upstream "Status / lifecycle" 一组（4 端点）：新 backplane feature `runtime/features/hermes_proxy/lifecycle/` 实现 `GET /hermes/status`（版本/paths/gateway liveness+state+platforms+exit_reason/active_sessions/config_version 聚合）、`POST /hermes/gateway/restart`、`POST /hermes/update`、`GET /hermes/actions/{name}/status`；spawn 模式镜像 upstream `_spawn_hermes_action`（whitelist + detached `Popen` + log file + `proc.poll()`），白名单仅 `{gateway-restart, hermes-update}`。Status payload 用 `_safe_import` 防御性导入 `gateway.status` / `gateway.config` / `hermes_state.SessionDB` / `hermes_cli` / `hermes_cli.config`，任一不可用就降级到 partial payload 而不 500。`pyproject.toml` packages 列表加 `lifecycle` 子包。前端新 `lib/hermes-lifecycle.ts` 客户端 + `options/SettingsStatus.tsx` 新 tab（Runtime 卡片 / Gateway 卡片 / 两个 Action 面板带日志 tail + fire-and-poll 模式，1s poll 频率，runtime 卡 10s 刷新），i18n 加 `options.nav.status`，index.tsx 加 nav button + render switch。§B 里 Status/lifecycle 一组整体搬到 §A；统计 ✅ 13→18（A 16→20），B 40+→36+ | §A 新增 Status/lifecycle 段（4 行）；§B 删 Status/lifecycle 段；快速统计；后端 `runtime/features/hermes_proxy/lifecycle/{__init__,routes,service}.py`（新建）、`runtime/features/hermes_proxy/__init__.py`、`pyproject.toml`；前端 `lib/hermes-lifecycle.ts`（新建）、`options/SettingsStatus.tsx`（新建）、`options/index.tsx`、`lib/i18n/{en,zh-CN}.ts` | （未提交） |
-
 <!--
 维护提示：
 - 新增 endpoint：先放进 §C；如果发现 upstream 已有对应，挪到 §A 并填对齐状态
 - upstream 加 endpoint：放进 §B；评估优先级
-- 任一端 endpoint 改了 payload：更新 §A 对应行的 mine-only additive + 状态；在 §E 追一行
-- 修了 §D 里某项：把那一项划掉/移除；在 §E 追一行
+- 任一端 endpoint 改了 payload：更新 §A 对应行的 mine-only additive + 状态
+- 修了 §D 里某项：把那一项划掉/移除
+- 决策演进通过 git log 看，不在文档里维护变更日志
 -->
