@@ -160,28 +160,16 @@ atexit.register(stop_server)
 
 
 def register(ctx) -> None:
-    """Hermes plugin entry point: start the HTTP server, register tools.
+    """Hermes plugin entry point: start the HTTP server.
 
-    Exposes four ``integration_*`` tools so the agent can list, install,
-    remove, and reload user integrations under ``/integrations/<name>/*``
-    via conversation. Built-in presets (e.g. ``lark``) are discovered and
-    mounted during HTTP-app boot — see ``runtime/features/integrations``.
+    No agent tools are registered. Integration lifecycle (install /
+    remove / reload / list) is operator-facing and lives in the
+    standalone ``hermes-integration`` CLI plus the loopback admin
+    endpoints under ``/hermes/integrations/*`` that the CLI talks to.
+    Built-in presets (e.g. ``lark``) are discovered and registered
+    during HTTP-app boot — see ``runtime/features/integrations``.
     """
+    del ctx  # unused; kept for plugin-protocol compatibility
     logger.info("Registering hermes-plugin-http-backplane")
     start_server()
-
-    from .runtime.features.integrations.tools import TOOLS
-
-    for name, schema, handler, emoji in TOOLS:
-        ctx.register_tool(
-            name=name,
-            toolset="integrations",
-            schema=schema,
-            handler=handler,
-            emoji=emoji,
-        )
-
-    logger.info(
-        "hermes-plugin-http-backplane loaded (HTTP server + %d integration tools)",
-        len(TOOLS),
-    )
+    logger.info("hermes-plugin-http-backplane loaded (HTTP server only)")

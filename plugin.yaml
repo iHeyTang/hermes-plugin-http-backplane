@@ -5,15 +5,12 @@ description: >
   Hermes plugin that hosts a local HTTP server for clients (browser
   extensions, future apps). Exposes /hermes/* wrappers over Hermes core
   (cron, sessions, model catalog, settings, memory, skills, conversation
-  attachments) and owns /integrations/<name>/* end-to-end: ships built-in
-  presets (e.g. lark) and exposes integration_* tools so the agent can
-  install, list, remove, and reload user-defined integrations under
-  ~/.hermes/integrations/ via conversation.
+  attachments) and serves /integrations/<name>/* for built-in presets
+  (e.g. lark) plus user integrations under ~/.hermes/integrations/.
+  Integration lifecycle (install / remove / reload / list) is operator-
+  facing: use the standalone ``hermes-integration`` CLI shipped by this
+  package, not agent tools.
 author: "iHeyTang"
 kind: standalone
-provides_tools:
-  - integration_list
-  - integration_install
-  - integration_remove
-  - integration_reload
+provides_tools: []
 hooks: []

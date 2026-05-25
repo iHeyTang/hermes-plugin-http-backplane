@@ -18,6 +18,9 @@ dependencies = [
 [project.entry-points."hermes_agent.plugins"]
 hermes-plugin-http-backplane = "hermes_plugin_http_backplane"
 
+[project.scripts]
+hermes-integration = "hermes_plugin_http_backplane.cli:main"
+
 [tool.setuptools]
 package-dir = { "hermes_plugin_http_backplane" = "." }
 packages = [
@@ -28,6 +31,7 @@ packages = [
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.attachments",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.cron",
+    "hermes_plugin_http_backplane.runtime.features.hermes_proxy.integrations_admin",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.sessions",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.settings",
     "hermes_plugin_http_backplane.runtime.features.integrations",
@@ -38,3 +42,4 @@ include-package-data = true
 
 [tool.setuptools.package-data]
 "hermes_plugin_http_backplane.runtime.features.integrations.presets.lark" = ["integration.yaml"]
+"hermes_plugin_http_backplane" = ["skills/*.md"]

@@ -10,6 +10,9 @@ Sub-modules:
 - ``attachments``: ``/hermes/attachments*`` — upload/delete conversation
   attachments, persisted under
   ``<hermes_home>/plugins/hermes-plugin-http-backplane/attachments/<session>/``
+- ``integrations_admin``: ``/hermes/integrations*`` — lifecycle admin
+  for ``/integrations/<name>/*``; called by the ``hermes-integration``
+  CLI, NOT exposed as agent tools
 
 These wrap ``hermes_state`` / ``cron.jobs`` etc. as Python libraries
 directly. That makes them available whenever the backplane is loaded —
@@ -23,7 +26,7 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from . import attachments, cron, sessions, settings
+from . import attachments, cron, integrations_admin, sessions, settings
 
 
 def register(app: web.Application) -> None:
@@ -32,3 +35,4 @@ def register(app: web.Application) -> None:
     settings.register(app)
     sessions.register(app)
     attachments.register(app)
+    integrations_admin.register(app)
