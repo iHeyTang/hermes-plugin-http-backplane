@@ -5,9 +5,10 @@ all wrap Hermes core state (``~/.hermes/config.yaml`` + adapters) and
 share no client UI other than the options page:
 
 - **Models** — provider catalog, per-provider model lists, main and
-  auxiliary model selection (``model_routes`` + ``config_routes``).
+  auxiliary model selection (``model_routes``).
 - **Providers** — provider credentials in the plugin's ``.env``
-  (``config_routes`` POST, ``provider_credentials_service``).
+  (``model_routes``'s ``/hermes/main-provider-settings`` endpoints,
+  backed by ``provider_credentials_service``).
 - **Skills** — Hermes skill discovery, file browser, enable/disable
   toggle (``skills_routes``).
 - **Memory** — read-only view of curated ``MEMORY.md`` / ``USER.md``
@@ -22,7 +23,6 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from .config_routes import register_config_routes
 from .memory_routes import register_memory_routes
 from .model_routes import register_model_routes
 from .skills_routes import register_skills_routes
@@ -30,7 +30,6 @@ from .skills_routes import register_skills_routes
 
 def register(app: web.Application) -> None:
     register_model_routes(app)
-    register_config_routes(app)
     register_memory_routes(app)
     register_skills_routes(app)
 

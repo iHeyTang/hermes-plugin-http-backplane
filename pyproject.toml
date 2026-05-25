@@ -33,6 +33,7 @@ packages = [
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.attachments",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.cron",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.integrations_admin",
+    "hermes_plugin_http_backplane.runtime.features.hermes_proxy.lifecycle",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.sessions",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.settings",
     "hermes_plugin_http_backplane.runtime.features.integrations",

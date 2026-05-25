@@ -40,7 +40,6 @@ def write_auxiliary_models_response(payload: Dict[str, Any]) -> Dict[str, Any]:
         provider=payload.get("provider"),
         model=payload.get("model"),
         base_url=payload.get("base_url"),
-        api_key=payload.get("api_key"),
     )
     return {"ok": True, **merged}
 

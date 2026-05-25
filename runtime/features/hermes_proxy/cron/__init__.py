@@ -12,14 +12,13 @@ and ``$HERMES_HOME``.
 
 from __future__ import annotations
 
-from .output_service import get_run, list_recent_runs
+from .output_service import list_recent_runs
 from .routes import register
 from .service import (
     create_job_response,
     delete_job_response,
     get_job_response,
     list_jobs_response,
-    parse_schedule_preview,
     pause_job_response,
     resume_job_response,
     trigger_job_response,
@@ -36,7 +35,5 @@ __all__ = [
     "pause_job_response",
     "resume_job_response",
     "trigger_job_response",
-    "parse_schedule_preview",
-    "get_run",
     "list_recent_runs",
 ]

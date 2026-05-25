@@ -528,88 +528,6 @@ def update_session_response(session_id: str, body: Dict[str, Any]) -> Dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# Regenerate title (manual, bypasses the 2-user-msg window)
-# ---------------------------------------------------------------------------
-
-
-def regenerate_title_response(session_id: str) -> Dict[str, Any]:
-    """Force-generate (and set) a session title via the auxiliary LLM.
-
-    Unlike the auto-title path that fires on append, this skips the
-    "must be within the first two user messages" guard. Use cases:
-
-    - Sessions that were created via a code path that doesn't trigger
-      auto-title (e.g. legacy ``api_server`` sessions before backplane
-      append-time titling existed).
-    - User explicitly clicks "regenerate name" in the UI.
-
-    The LLM call runs synchronously here so the caller (typically a UI
-    button) gets a deterministic success/failure response. For the
-    common case where the user does this on demand for a single
-    session, blocking ~5-10s on the auxiliary call is acceptable.
-    """
-    db, err = _open_db()
-    if db is None:
-        return {"ok": False, "error": err}
-    try:
-        sid: Optional[str] = db.resolve_session_id(session_id)
-        if not sid:
-            return {"ok": False, "error": "session not found"}
-
-        history = db.get_messages(sid)
-        if not history:
-            return {"ok": False, "error": "session has no messages to title from"}
-
-        # Use the first user message + first assistant message as the
-        # prompt material, mirroring how maybe_auto_title picks its
-        # inputs from the opening exchange.
-        first_user_text = ""
-        first_assistant_text = ""
-        for m in history:
-            role = m.get("role")
-            text = _content_to_text(m.get("content"))
-            if not first_user_text and role == "user" and text:
-                first_user_text = text
-            elif first_user_text and role == "assistant" and text:
-                first_assistant_text = text
-                break
-
-        if not first_user_text or not first_assistant_text:
-            return {
-                "ok": False,
-                "error": "session does not have a complete user/assistant exchange yet",
-            }
-
-        try:
-            from agent.title_generator import generate_title  # type: ignore
-        except Exception as exc:
-            return {"ok": False, "error": f"title generator unavailable: {exc}"}
-
-        title = generate_title(first_user_text, first_assistant_text)
-        if not title:
-            return {"ok": False, "error": "title generation returned empty"}
-
-        try:
-            db.set_session_title(sid, title)
-        except ValueError as exc:
-            # Conflict with another session's title — surface so caller
-            # can present "try again" rather than failing silently.
-            return {
-                "ok": False,
-                "error": str(exc),
-                "kind": "title_conflict",
-            }
-
-        session = db.get_session(sid)
-        return {"ok": True, "session": session, "title": title}
-    except Exception as exc:
-        logger.exception("regenerate_title failed (id=%s)", session_id)
-        return {"ok": False, "error": _unavailable_error(exc)}
-    finally:
-        db.close()
-
-
-# ---------------------------------------------------------------------------
 # Delete session
 # ---------------------------------------------------------------------------
 
@@ -628,7 +546,7 @@ def delete_session_response(session_id: str) -> Dict[str, Any]:
             # Defense against TOCTOU between resolve and delete — unlikely
             # but possible if another process pruned the row in between.
             return {"ok": False, "error": "session not found"}
-        return {"ok": True, "session_id": sid}
+        return {"ok": True}
     except Exception as exc:
         logger.exception("delete_session failed (id=%s)", session_id)
         return {"ok": False, "error": _unavailable_error(exc)}

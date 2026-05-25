@@ -11,11 +11,85 @@ from .skills_service import (
 from ....common import json_error, read_json_object
 
 
+_UPSTREAM_SKILL_FIELDS = ("name", "description", "category", "enabled")
+_RICH_SKILL_FIELDS = (
+    "name",
+    "path",
+    "origin",
+    "platforms",
+    "version",
+    "tags",
+    "created_at",
+    "updated_at",
+    "timestamp_source",
+)
+
+
 async def handle_skills_list(_request: web.Request) -> web.Response:
+    """GET /hermes/skills — strict 1:1 with upstream GET /api/skills.
+
+    Each entry carries only ``{name, description, category, enabled}``
+    (matches what ``tools.skills_tool._find_all_skills`` returns +
+    ``enabled`` injected by upstream's route).
+
+    All the rich per-skill metadata the backplane also computes
+    (``path``, ``origin``, ``platforms``, ``version``, ``tags``,
+    timestamps, source) lives on the mine-only ``GET /hermes/skills/meta``
+    so UI clients can join by name when they want it.
+    """
     try:
-        return web.json_response(list_skills_response())
+        payload = list_skills_response()
     except OSError as exc:
         return json_error(500, str(exc))
+    skills = payload.get("skills") or []
+    return web.json_response(
+        [
+            {k: s.get(k) for k in _UPSTREAM_SKILL_FIELDS if k in s}
+            for s in skills
+            if isinstance(s, dict)
+        ]
+    )
+
+
+async def handle_skills_meta(_request: web.Request) -> web.Response:
+    """GET /hermes/skills/meta — mine-only metadata sidecar for /hermes/skills.
+
+    Returns::
+
+        {
+          "skills_dirs": [...],
+          "totals":      {"total": N, "enabled": N, "disabled": N},
+          "origin_counts": {origin: count, ...},
+          "items": [
+            {name, path, origin, platforms, version, tags,
+             created_at, updated_at, timestamp_source},
+            ...
+          ]
+        }
+
+    ``items`` is keyed alongside ``/hermes/skills`` by ``name``; UI
+    clients fetch both endpoints in parallel and join per-entry on the
+    rich metadata they need. Bundle-level diagnostics (``skills_dirs``,
+    ``totals``, ``origin_counts``) come from the same disk scan so
+    they're cheap to bundle here.
+    """
+    try:
+        payload = list_skills_response()
+    except OSError as exc:
+        return json_error(500, str(exc))
+    skills = payload.get("skills") or []
+    return web.json_response(
+        {
+            "skills_dirs": payload.get("skills_dirs") or [],
+            "totals": payload.get("totals") or {},
+            "origin_counts": payload.get("origin_counts") or {},
+            "items": [
+                {k: s.get(k) for k in _RICH_SKILL_FIELDS if k in s}
+                for s in skills
+                if isinstance(s, dict)
+            ],
+        }
+    )
 
 
 async def handle_skill_files(request: web.Request) -> web.Response:
@@ -48,11 +122,10 @@ async def handle_skill_file(request: web.Request) -> web.Response:
 
 
 async def handle_skill_toggle(request: web.Request) -> web.Response:
-    """POST /hermes/skills/toggle — body ``{name, enabled}``.
+    """PUT /hermes/skills/toggle — body ``{name, enabled}``.
 
-    Mirrors upstream ``PUT /api/skills/toggle`` in semantics; we expose it
-    as POST to keep our HTTP verb conventions consistent across the
-    ``/hermes/*`` surface.
+    Method + body shape mirror upstream ``PUT /api/skills/toggle``.
+    Response shape matches upstream: ``{ok, name, enabled}``.
     """
     try:
         body = await read_json_object(request)
@@ -81,8 +154,12 @@ def register_skills_routes(app: web.Application) -> None:
     app.add_routes(
         [
             web.get("/hermes/skills", handle_skills_list),
+            # Mine-only companion that exposes the bundle-level scan
+            # diagnostics that don't fit a raw list response.
+            web.get("/hermes/skills/meta", handle_skills_meta),
             web.get("/hermes/skills/{name}/files", handle_skill_files),
             web.get("/hermes/skills/{name}/file", handle_skill_file),
-            web.post("/hermes/skills/toggle", handle_skill_toggle),
+            # PUT mirrors upstream PUT /api/skills/toggle.
+            web.put("/hermes/skills/toggle", handle_skill_toggle),
         ]
     )

@@ -291,25 +291,3 @@ def list_recent_runs(
     }
 
 
-def get_run(job_id: str, run_id: str) -> Dict[str, Any]:
-    """Return the full content of a single cron run.
-
-    Same payload shape as one entry in ``list_recent_runs`` — the
-    index already carries everything; this endpoint exists for direct
-    lookup by ``(job_id, run_id)``.
-    """
-    if not job_id or not run_id:
-        return {"ok": False, "error": "job_id and run_id required"}
-    # Defend against ``..`` and absolute paths in user-controlled segments.
-    if "/" in job_id or "\\" in job_id or job_id.startswith("."):
-        return {"ok": False, "error": "invalid job_id"}
-    if "/" in run_id or "\\" in run_id or run_id.startswith("."):
-        return {"ok": False, "error": "invalid run_id"}
-
-    path = _output_root() / job_id / f"{run_id}.md"
-    if not path.is_file():
-        return {"ok": False, "error": "run not found"}
-    p = _parse_run_file(job_id, run_id, path)
-    if p is None:
-        return {"ok": False, "error": "failed to parse run file"}
-    return {"ok": True, "run": _serialise_run(p)}

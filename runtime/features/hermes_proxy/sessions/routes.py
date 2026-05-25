@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from ....common import read_json_object
+from ....common import read_json_object, strip_ok
 from .service import (
     MAX_MESSAGE_BODY_BYTES,
     append_message_response,
@@ -34,7 +34,6 @@ from .service import (
     get_messages_response,
     get_session_response,
     list_sessions_response,
-    regenerate_title_response,
     update_session_response,
 )
 
@@ -85,7 +84,8 @@ async def handle_list_sessions(request: web.Request) -> web.Response:
         # client can distinguish "Hermes isn't ready yet" from "session
         # missing" (which is 404 below).
         return web.json_response(payload, status=503)
-    return web.json_response(payload)
+    # Shape matches upstream GET /api/sessions: {sessions, total, limit, offset}.
+    return web.json_response(strip_ok(payload))
 
 
 async def handle_get_session(request: web.Request) -> web.Response:
@@ -94,7 +94,9 @@ async def handle_get_session(request: web.Request) -> web.Response:
     if not payload.get("ok"):
         status = 404 if payload.get("error") == "session not found" else 503
         return web.json_response(payload, status=status)
-    return web.json_response(payload)
+    # Upstream GET /api/sessions/{id} returns the session dict directly,
+    # not wrapped in {ok, session}. Unwrap to match.
+    return web.json_response(payload["session"])
 
 
 async def handle_get_messages(request: web.Request) -> web.Response:
@@ -103,7 +105,8 @@ async def handle_get_messages(request: web.Request) -> web.Response:
     if not payload.get("ok"):
         status = 404 if payload.get("error") == "session not found" else 503
         return web.json_response(payload, status=status)
-    return web.json_response(payload)
+    # Shape matches upstream: {session_id, messages}.
+    return web.json_response(strip_ok(payload))
 
 
 # ---------------------------------------------------------------------------
@@ -185,33 +188,8 @@ async def handle_delete_session(request: web.Request) -> web.Response:
     if not payload.get("ok"):
         status = 404 if payload.get("error") == "session not found" else 503
         return web.json_response(payload, status=status)
-    return web.json_response(payload)
-
-
-async def handle_regenerate_title(request: web.Request) -> web.Response:
-    """POST /hermes/sessions/{id}/regenerate-title.
-
-    Forces a title generation regardless of the "first two user messages"
-    window that the auto-title path respects. Synchronous LLM call —
-    expect 5-10s on warm-cache providers, longer when the auxiliary
-    chain has to fall back.
-    """
-    session_id = request.match_info.get("session_id", "")
-    payload = regenerate_title_response(session_id)
-    if not payload.get("ok"):
-        err = payload.get("error", "")
-        if err == "session not found":
-            status = 404
-        elif payload.get("kind") == "title_conflict":
-            status = 409
-        elif (
-            err.startswith("session has no messages")
-            or err.startswith("session does not have a complete")
-        ):
-            status = 400
-        else:
-            status = 503
-        return web.json_response(payload, status=status)
+    # Upstream returns {ok: true}; we keep our additive ``session_id``
+    # (the resolved canonical id, useful when the caller passed a prefix).
     return web.json_response(payload)
 
 
@@ -228,10 +206,6 @@ def register(app: web.Application) -> None:
             ),
             web.post(
                 "/hermes/sessions/{session_id}/messages", handle_append_message
-            ),
-            web.post(
-                "/hermes/sessions/{session_id}/regenerate-title",
-                handle_regenerate_title,
             ),
         ]
     )

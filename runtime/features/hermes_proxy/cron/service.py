@@ -19,25 +19,146 @@ index through ``output_service``. ``deliver`` only controls *additional*
 channel push (Feishu / Telegram / etc.) on top of that. The frontend
 may pass ``deliver="inbox"`` as a legacy alias for ``"local"``; both
 mean "file-only, don't push to any messaging channel".
-
-Note on the legacy "Hermes Card" injection: an earlier version of this
-module appended a ``## Hermes Card`` instruction block to every cron
-prompt so the extension could render scannable cards. That coupling was
-a layering mistake — cron creation should not know about the extension's
-display surface. The injection is gone; the extension renders cron output
-verbatim. A one-shot migration (`_migrate_strip_legacy_protocol`) removes
-the marker block from any prompts that were already augmented.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-from typing import Any, Dict, List, Optional
+import threading
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from ....adapters.hermes_core import hermes_home
 
 logger = logging.getLogger("my-browser-bridge")
+
+
+# ---------------------------------------------------------------------------
+# Cross-profile dispatch — mirrors upstream `_call_cron_for_profile` so that
+# `?profile=<name>` / `?profile=all` work the same way they do against
+# `hermes_cli/web_server.py`.
+#
+# Risk note: the swap mutates module-level globals on `cron.jobs`. The lock
+# below serialises this against other backplane handlers; if the same
+# process also runs the cron scheduler (`hermes cron run`), the scheduler
+# does not take this lock and could in theory observe a swapped path
+# mid-call. We accept the risk because upstream does the same thing and
+# the swap window is microseconds. If this ever becomes a real problem,
+# the alternative is to read other profiles' `jobs.json` from disk
+# directly (cron.jobs.load_jobs honours its module-level paths).
+# ---------------------------------------------------------------------------
+
+
+_CRON_PROFILE_LOCK = threading.RLock()
+
+
+def _cron_profile_home(profile: Optional[str]) -> Tuple[str, Path]:
+    """Resolve ``profile`` to ``(canonical_name, hermes_home_path)``.
+
+    Mirrors ``hermes_cli/web_server.py:_cron_profile_home``. Raises
+    ``ValueError`` for an invalid name and ``LookupError`` for an
+    unknown profile so the caller can map to 400 / 404.
+    """
+    raw = (profile or "default").strip() or "default"
+    try:
+        from hermes_cli import profiles as profiles_mod  # type: ignore
+
+        canon = profiles_mod.normalize_profile_name(raw)
+        try:
+            profiles_mod.validate_profile_name(canon)
+        except AttributeError:
+            # Older Hermes may not have validate_profile_name.
+            pass
+        if not profiles_mod.profile_exists(canon):
+            raise LookupError(f"profile {canon!r} does not exist")
+        return canon, profiles_mod.get_profile_dir(canon)
+    except (ImportError, AttributeError):
+        # No profile helpers available — single-profile mode. Only
+        # accept the running process's profile (or "default" alias).
+        own = _current_profile_name()
+        if raw not in (own, "default"):
+            raise LookupError(f"profile {raw!r} does not exist")
+        return own, hermes_home()
+
+
+def _list_known_profile_homes() -> List[Tuple[str, Path]]:
+    """All profiles visible to this process, oldest-first by name.
+
+    Falls back to a single-entry list (the running process's home) when
+    ``hermes_cli.profiles.list_profiles`` isn't importable.
+    """
+    try:
+        from hermes_cli import profiles as profiles_mod  # type: ignore
+
+        items: List[Tuple[str, Path]] = []
+        for p in profiles_mod.list_profiles():
+            name = getattr(p, "name", None) or (p.get("name") if isinstance(p, dict) else None)
+            if not isinstance(name, str) or not name:
+                continue
+            try:
+                items.append((name, profiles_mod.get_profile_dir(name)))
+            except Exception:
+                continue
+        if items:
+            return items
+    except Exception:
+        pass
+    return [(_current_profile_name(), hermes_home())]
+
+
+def _annotate(job: Dict[str, Any], profile: str, home: Path) -> Dict[str, Any]:
+    """Add upstream `_annotate_cron_job`'s 4 fields to a job dict."""
+    out = dict(job)
+    out["profile"] = profile
+    out["profile_name"] = profile
+    out["hermes_home"] = str(home)
+    out["is_default_profile"] = profile == "default"
+    return out
+
+
+def _call_for_profile(profile: Optional[str], func_name: str, *args, **kwargs):
+    """Run a ``cron.jobs`` helper against ``profile``'s HERMES_HOME.
+
+    Same pattern upstream uses: temporarily swap ``cron.jobs.CRON_DIR``
+    / ``JOBS_FILE`` / ``OUTPUT_DIR`` under a lock, run the helper,
+    restore. Annotates list / dict results with the four profile-
+    annotation fields so the response shape matches
+    ``hermes_cli/web_server.py``'s.
+    """
+    profile_name, home = _cron_profile_home(profile)
+    with _CRON_PROFILE_LOCK:
+        from cron import jobs as cron_jobs  # type: ignore
+
+        old_cron_dir = cron_jobs.CRON_DIR
+        old_jobs_file = cron_jobs.JOBS_FILE
+        old_output_dir = cron_jobs.OUTPUT_DIR
+        cron_jobs.CRON_DIR = home / "cron"
+        cron_jobs.JOBS_FILE = cron_jobs.CRON_DIR / "jobs.json"
+        cron_jobs.OUTPUT_DIR = cron_jobs.CRON_DIR / "output"
+        try:
+            result = getattr(cron_jobs, func_name)(*args, **kwargs)
+        finally:
+            cron_jobs.CRON_DIR = old_cron_dir
+            cron_jobs.JOBS_FILE = old_jobs_file
+            cron_jobs.OUTPUT_DIR = old_output_dir
+
+    if isinstance(result, list):
+        return [_annotate(j, profile_name, home) for j in result if isinstance(j, dict)]
+    if isinstance(result, dict):
+        return _annotate(result, profile_name, home)
+    return result
+
+
+def _find_job_profile(job_id: str) -> Optional[str]:
+    """Search known profiles for the one owning ``job_id``. Returns name or None."""
+    for name, _home in _list_known_profile_homes():
+        try:
+            job = _call_for_profile(name, "get_job", job_id)
+        except Exception:
+            continue
+        if job:
+            return name
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -53,39 +174,6 @@ def _cron_unavailable_error(exc: Exception) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# Legacy "Inbox protocol" cleanup — strip the marker block from prompts that
-# the previous version of this module augmented. The marker is a hidden HTML
-# comment we used as an idempotency anchor; the block runs from the marker
-# to end-of-prompt (the instruction was always appended at the tail).
-# ---------------------------------------------------------------------------
-
-
-_LEGACY_INBOX_PROTOCOL_MARKER = "<!-- hermes-inbox-protocol-v1 -->"
-# Strip the marker + everything that followed it (the protocol body lived at
-# the tail of the prompt). We also chew up the blank line(s) that separated
-# the original prompt from the appended block so the cleaned text doesn't
-# end with stray whitespace.
-_LEGACY_INBOX_PROTOCOL_RE = re.compile(
-    r"\n*\s*" + re.escape(_LEGACY_INBOX_PROTOCOL_MARKER) + r".*\Z",
-    re.DOTALL,
-)
-
-
-def _strip_legacy_inbox_protocol(prompt: Any) -> Any:
-    """Remove the legacy ``<!-- hermes-inbox-protocol-v1 -->`` block.
-
-    Returns ``prompt`` unchanged for non-strings or prompts without the
-    marker. Used on read (so the options page never shows the stale
-    instructions) and on update (so an edit re-saves a clean prompt).
-    """
-    if not isinstance(prompt, str):
-        return prompt
-    if _LEGACY_INBOX_PROTOCOL_MARKER not in prompt:
-        return prompt
-    return _LEGACY_INBOX_PROTOCOL_RE.sub("", prompt).rstrip() + "\n"
-
-
 # Legacy deliver alias: "inbox" → "local". An earlier frontend used
 # "inbox" to mean "file-only, no channel push"; we keep accepting it
 # (and normalise it back to the canonical "local") so saved configs
@@ -96,157 +184,79 @@ def _normalise_deliver(value: Any) -> Any:
     return value
 
 
-_MIGRATION_FLAG_PATH_PARTS = ("inbox", "legacy-protocol-stripped.marker")
+def _current_profile_name() -> str:
+    """Resolve the running process's profile name from ``$HERMES_HOME``.
 
-
-def _migration_flag_path():
-    return hermes_home().joinpath(*_MIGRATION_FLAG_PATH_PARTS)
-
-
-_migration_attempted = False
-
-
-def _migrate_strip_legacy_protocol() -> None:
-    """Walk every cron job once and re-save prompts with the legacy block
-    stripped. Idempotent via a marker file under ``$HERMES_HOME/inbox/``.
-
-    Runs lazily — gated by the first call to a public CRUD function — so a
-    bridge that never touches cron jobs doesn't pay the import cost.
-    Failures are logged but never raise; this is best-effort cleanup, not
-    a correctness path.
+    Mirrors what upstream ``hermes_cli.profiles.get_active_profile_name``
+    does (``$HERMES_HOME`` → ``"default"`` / ``<name>`` / ``"custom"``).
+    Falls back to ``"default"`` when the helper isn't importable so the
+    annotation always carries *something* sane.
     """
-    global _migration_attempted
-    if _migration_attempted:
-        return
-    _migration_attempted = True
-
-    flag = _migration_flag_path()
     try:
-        if flag.exists():
-            return
-    except OSError:
-        return
+        from hermes_cli.profiles import get_active_profile_name  # type: ignore
 
-    try:
-        from cron.jobs import list_jobs, update_job  # type: ignore
-    except Exception as exc:
-        logger.debug(
-            "legacy inbox-protocol migration skipped (cron module unavailable): %s",
-            exc,
-        )
-        return
-
-    try:
-        jobs = list_jobs(include_disabled=True)
-    except Exception as exc:
-        logger.warning("legacy inbox-protocol migration: list_jobs failed: %s", exc)
-        return
-
-    cleaned = 0
-    for job in jobs or []:
-        if not isinstance(job, dict):
-            continue
-        prompt = job.get("prompt")
-        if not isinstance(prompt, str):
-            continue
-        if _LEGACY_INBOX_PROTOCOL_MARKER not in prompt:
-            continue
-        stripped = _strip_legacy_inbox_protocol(prompt)
-        if stripped == prompt:
-            continue
-        job_id = job.get("id")
-        if not isinstance(job_id, str) or not job_id:
-            continue
-        try:
-            update_job(job_id, {"prompt": stripped})
-            cleaned += 1
-        except Exception as exc:
-            logger.warning(
-                "legacy inbox-protocol migration: update_job %s failed: %s",
-                job_id,
-                exc,
-            )
-
-    if cleaned:
-        logger.info(
-            "stripped legacy inbox-protocol block from %d cron job(s)", cleaned
-        )
-
-    try:
-        flag.parent.mkdir(parents=True, exist_ok=True)
-        flag.write_text("ok\n", encoding="utf-8")
-    except OSError as exc:
-        # Migration ran but we couldn't persist the flag — next process
-        # start will re-run it. Idempotent, so this is merely wasteful,
-        # not incorrect.
-        logger.debug("could not write migration flag %s: %s", flag, exc)
+        return str(get_active_profile_name() or "default")
+    except Exception:
+        return "default"
 
 
-def _clean_job(job: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Strip the legacy protocol block from a job's ``prompt`` field
-    before returning it to the frontend.
+def list_jobs_response(profile: str = "all") -> Dict[str, Any]:
+    """List cron jobs, optionally scoped to a profile.
 
-    Defensive: in case the disk-side migration hasn't run yet (e.g. it
-    failed earlier or the flag file got removed), reads still surface
-    clean prompts.
+    ``profile="all"`` aggregates every known profile (matches upstream
+    default). ``profile="<name>"`` lists only that profile's jobs.
     """
-    if not isinstance(job, dict):
-        return job
-    prompt = job.get("prompt")
-    if isinstance(prompt, str) and _LEGACY_INBOX_PROTOCOL_MARKER in prompt:
-        job = dict(job)
-        job["prompt"] = _strip_legacy_inbox_protocol(prompt)
-    return job
-
-
-def list_jobs_response() -> Dict[str, Any]:
-    """Return all cron jobs, including paused/disabled ones."""
-    _migrate_strip_legacy_protocol()
+    requested = (profile or "all").strip() or "all"
     try:
-        from cron.jobs import list_jobs  # type: ignore
-    except Exception as exc:
-        logger.warning("cron.jobs.list_jobs unavailable: %s", exc)
-        return {"ok": False, "error": _cron_unavailable_error(exc), "jobs": []}
-    try:
-        jobs = list_jobs(include_disabled=True)
+        if requested.lower() == "all":
+            jobs: List[Dict[str, Any]] = []
+            for name, _home in _list_known_profile_homes():
+                try:
+                    jobs.extend(_call_for_profile(name, "list_jobs", True))
+                except LookupError:
+                    continue
+                except Exception:
+                    logger.exception("list_jobs failed for profile %s", name)
+            return {"ok": True, "jobs": jobs}
+        return {
+            "ok": True,
+            "jobs": _call_for_profile(requested, "list_jobs", True),
+        }
+    except LookupError as exc:
+        return {"ok": False, "error": str(exc), "jobs": []}
     except Exception as exc:
         logger.exception("list_jobs failed")
         return {"ok": False, "error": f"list_jobs failed: {exc}", "jobs": []}
-    return {"ok": True, "jobs": [_clean_job(j) for j in (jobs or [])]}
 
 
-def get_job_response(job_id: str) -> Dict[str, Any]:
-    _migrate_strip_legacy_protocol()
+def get_job_response(job_id: str, profile: Optional[str] = None) -> Dict[str, Any]:
+    selected = profile or _find_job_profile(job_id)
+    if not selected:
+        return {"ok": False, "error": "job not found"}
     try:
-        from cron.jobs import get_job  # type: ignore
-    except Exception as exc:
-        return {"ok": False, "error": _cron_unavailable_error(exc)}
-    try:
-        job = get_job(job_id)
+        job = _call_for_profile(selected, "get_job", job_id)
+    except LookupError as exc:
+        return {"ok": False, "error": str(exc)}
     except Exception as exc:
         logger.exception("get_job %s failed", job_id)
         return {"ok": False, "error": f"get_job failed: {exc}"}
     if not job:
         return {"ok": False, "error": "job not found"}
-    return {"ok": True, "job": _clean_job(job)}
+    return {"ok": True, "job": job}
 
 
-def create_job_response(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Create a new cron job.
+def create_job_response(
+    payload: Dict[str, Any], profile: Optional[str] = None
+) -> Dict[str, Any]:
+    """Create a new cron job in ``profile`` (default: ``"default"``).
 
-    Accepts a subset of ``cron.jobs.create_job`` kwargs that make sense from
-    the options page: ``prompt`` / ``schedule`` / ``name`` / ``deliver`` /
-    ``repeat`` / ``skills`` / ``model`` / ``provider`` / ``base_url`` /
-    ``script`` / ``no_agent`` / ``context_from`` / ``enabled_toolsets`` /
-    ``workdir``. Extra keys are ignored so the frontend can stay forward-
-    compatible without breaking when upstream adds new ones.
+    Body validation kept here (rather than letting ``cron.jobs.create_job``
+    raise) so error messages stay shaped consistently with the rest of
+    the wrapper. Accepts the full ``cron.jobs.create_job`` kwarg set —
+    upstream's pydantic restricts to 4 keys but the underlying function
+    takes more; we pass through everything ``cron.jobs`` understands so
+    agents calling via shell get the full surface.
     """
-    _migrate_strip_legacy_protocol()
-    try:
-        from cron.jobs import create_job  # type: ignore
-    except Exception as exc:
-        return {"ok": False, "error": _cron_unavailable_error(exc)}
-
     schedule = payload.get("schedule")
     if not isinstance(schedule, str) or not schedule.strip():
         return {"ok": False, "error": "schedule is required"}
@@ -262,12 +272,6 @@ def create_job_response(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if not no_agent and not (isinstance(prompt, str) and prompt.strip()):
         return {"ok": False, "error": "prompt is required unless no_agent=true"}
-
-    # Defensive strip on create too — a frontend that round-trips an older
-    # job's prompt (edit-as-new) shouldn't accidentally re-introduce the
-    # marker block.
-    if isinstance(prompt, str):
-        prompt = _strip_legacy_inbox_protocol(prompt)
 
     kwargs: Dict[str, Any] = {
         "prompt": prompt,
@@ -309,63 +313,34 @@ def create_job_response(payload: Dict[str, Any]) -> Dict[str, Any]:
         kwargs["context_from"] = payload["context_from"]
 
     try:
-        job = create_job(**kwargs)
+        job = _call_for_profile(profile or "default", "create_job", **kwargs)
+    except LookupError as exc:
+        return {"ok": False, "error": str(exc)}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     except Exception as exc:
         logger.exception("create_job failed")
         return {"ok": False, "error": f"create_job failed: {exc}"}
-    return {"ok": True, "job": _clean_job(job)}
+    return {"ok": True, "job": job}
 
 
-# Fields the frontend is allowed to pass through to ``cron.jobs.update_job``.
-# Locked down so a stray field name can't silently mutate scheduler-internal
-# state (``state``, ``last_run_at``, ``next_run_at``, ...).
-_UPDATABLE_FIELDS = frozenset(
-    (
-        "name",
-        "prompt",
-        "schedule",
-        "deliver",
-        "skills",
-        "skill",
-        "model",
-        "provider",
-        "base_url",
-        "script",
-        "no_agent",
-        "context_from",
-        "enabled_toolsets",
-        "workdir",
-        "repeat",
-    )
-)
+def update_job_response(
+    job_id: str, updates: Dict[str, Any], profile: Optional[str] = None
+) -> Dict[str, Any]:
+    """Pass-through to ``cron.jobs.update_job(job_id, updates)`` in ``profile``.
 
-
-def update_job_response(job_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
-    _migrate_strip_legacy_protocol()
+    Strict mirror of upstream ``hermes_cli/web_server.py:update_cron_job``:
+    forwards the entire ``body.updates`` dict (no field whitelist, no
+    empty-dict rejection, no deliver-alias normalisation). Anything
+    upstream's pydantic model would accept gets through.
+    """
+    selected = profile or _find_job_profile(job_id)
+    if not selected:
+        return {"ok": False, "error": "job not found"}
     try:
-        from cron.jobs import update_job  # type: ignore
-    except Exception as exc:
-        return {"ok": False, "error": _cron_unavailable_error(exc)}
-
-    filtered: Dict[str, Any] = {
-        k: v for k, v in updates.items() if k in _UPDATABLE_FIELDS
-    }
-    if not filtered:
-        return {"ok": False, "error": "no updatable fields supplied"}
-
-    # Strip the legacy block on update too — the user editing a prompt
-    # from the options page should never have to scroll past stale
-    # injected instructions to find their actual text.
-    if isinstance(filtered.get("prompt"), str):
-        filtered["prompt"] = _strip_legacy_inbox_protocol(filtered["prompt"])
-
-    if "deliver" in filtered:
-        filtered["deliver"] = _normalise_deliver(filtered["deliver"])
-
-    try:
-        job = update_job(job_id, filtered)
+        job = _call_for_profile(selected, "update_job", job_id, updates)
+    except LookupError as exc:
+        return {"ok": False, "error": str(exc)}
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
     except Exception as exc:
@@ -373,86 +348,52 @@ def update_job_response(job_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": f"update_job failed: {exc}"}
     if not job:
         return {"ok": False, "error": "job not found"}
-    return {"ok": True, "job": _clean_job(job)}
+    return {"ok": True, "job": job}
 
 
-def _lifecycle_op(job_id: str, op_name: str) -> Dict[str, Any]:
+def _lifecycle_op(
+    job_id: str, op_name: str, profile: Optional[str] = None
+) -> Dict[str, Any]:
+    if op_name not in ("pause_job", "resume_job", "trigger_job"):
+        return {"ok": False, "error": f"unknown op: {op_name}"}
+    selected = profile or _find_job_profile(job_id)
+    if not selected:
+        return {"ok": False, "error": "job not found"}
     try:
-        if op_name == "pause":
-            from cron.jobs import pause_job as _op  # type: ignore
-        elif op_name == "resume":
-            from cron.jobs import resume_job as _op  # type: ignore
-        elif op_name == "trigger":
-            from cron.jobs import trigger_job as _op  # type: ignore
-        else:
-            return {"ok": False, "error": f"unknown op: {op_name}"}
-    except Exception as exc:
-        return {"ok": False, "error": _cron_unavailable_error(exc)}
-    try:
-        job = _op(job_id)
+        job = _call_for_profile(selected, op_name, job_id)
+    except LookupError as exc:
+        return {"ok": False, "error": str(exc)}
     except Exception as exc:
         logger.exception("%s %s failed", op_name, job_id)
         return {"ok": False, "error": f"{op_name} failed: {exc}"}
     if not job:
         return {"ok": False, "error": "job not found"}
-    return {"ok": True, "job": _clean_job(job)}
+    return {"ok": True, "job": job}
 
 
-def pause_job_response(job_id: str) -> Dict[str, Any]:
-    return _lifecycle_op(job_id, "pause")
+def pause_job_response(job_id: str, profile: Optional[str] = None) -> Dict[str, Any]:
+    return _lifecycle_op(job_id, "pause_job", profile)
 
 
-def resume_job_response(job_id: str) -> Dict[str, Any]:
-    return _lifecycle_op(job_id, "resume")
+def resume_job_response(job_id: str, profile: Optional[str] = None) -> Dict[str, Any]:
+    return _lifecycle_op(job_id, "resume_job", profile)
 
 
-def trigger_job_response(job_id: str) -> Dict[str, Any]:
-    return _lifecycle_op(job_id, "trigger")
+def trigger_job_response(job_id: str, profile: Optional[str] = None) -> Dict[str, Any]:
+    return _lifecycle_op(job_id, "trigger_job", profile)
 
 
-def delete_job_response(job_id: str) -> Dict[str, Any]:
+def delete_job_response(job_id: str, profile: Optional[str] = None) -> Dict[str, Any]:
+    selected = profile or _find_job_profile(job_id)
+    if not selected:
+        return {"ok": False, "error": "job not found"}
     try:
-        from cron.jobs import remove_job  # type: ignore
-    except Exception as exc:
-        return {"ok": False, "error": _cron_unavailable_error(exc)}
-    try:
-        removed = remove_job(job_id)
+        removed = _call_for_profile(selected, "remove_job", job_id)
+    except LookupError as exc:
+        return {"ok": False, "error": str(exc)}
     except Exception as exc:
         logger.exception("remove_job %s failed", job_id)
         return {"ok": False, "error": f"remove_job failed: {exc}"}
     if not removed:
         return {"ok": False, "error": "job not found"}
     return {"ok": True}
-
-
-def parse_schedule_preview(schedule: str) -> Dict[str, Any]:
-    """Preview how Hermes will parse a schedule string.
-
-    Lets the options page give immediate feedback on invalid schedules
-    without round-tripping a job create. Mirrors ``cron.jobs.parse_schedule``
-    plus ``compute_next_run`` so the UI can also display the next run.
-    """
-    if not isinstance(schedule, str) or not schedule.strip():
-        return {"ok": False, "error": "schedule is required"}
-    try:
-        from cron.jobs import compute_next_run, parse_schedule  # type: ignore
-    except Exception as exc:
-        return {"ok": False, "error": _cron_unavailable_error(exc)}
-    try:
-        parsed = parse_schedule(schedule.strip())
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
-    except Exception as exc:
-        logger.exception("parse_schedule failed")
-        return {"ok": False, "error": f"parse_schedule failed: {exc}"}
-    try:
-        next_run = compute_next_run(parsed)
-    except Exception as exc:
-        logger.warning("compute_next_run failed: %s", exc)
-        next_run = None
-    return {
-        "ok": True,
-        "schedule": parsed,
-        "display": parsed.get("display"),
-        "next_run_at": next_run,
-    }

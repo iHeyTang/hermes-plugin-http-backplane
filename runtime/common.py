@@ -14,6 +14,18 @@ def json_error(status: int, message: str) -> web.Response:
     return web.json_response({"ok": False, "error": message}, status=status)
 
 
+def strip_ok(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop the internal ``ok`` key from a successful service response.
+
+    Services in this package return ``{"ok": True, ...data}`` to let
+    routes distinguish success from failure without sentinel values, but
+    external callers shouldn't see the envelope — we mirror the
+    upstream Hermes dashboard's ``/api/*`` shapes, which don't wrap
+    success responses.
+    """
+    return {k: v for k, v in payload.items() if k != "ok"}
+
+
 async def read_json_object(
     request: web.Request,
     *,

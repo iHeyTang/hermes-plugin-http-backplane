@@ -110,35 +110,35 @@ def _resolve_capabilities(*, model: str, provider: str) -> Dict[str, Any]:
 
 
 def read_main_model() -> Dict[str, Any]:
+    """Return main-model state in upstream `/api/model/info` shape.
+
+    Output is the upstream shape (``model`` / ``provider`` /
+    ``auto_context_length`` / ``config_context_length`` /
+    ``effective_context_length`` / ``capabilities``) plus the one
+    additive field with a real consumer: ``base_url`` (read by
+    extension's ``HermesModelConfigTab``). YAML parse failures are
+    swallowed to empty values rather than surfaced — the only thing
+    that previously consumed an ``error`` key was a dead wrapper, and
+    a noisy 500-with-traceback in the backplane log is more debuggable
+    than a JSON string in the response.
+    """
     path = _config_yaml_path()
+    empty = {
+        "provider": "auto",
+        "model": "",
+        "base_url": None,
+        "auto_context_length": 0,
+        "config_context_length": 0,
+        "effective_context_length": 0,
+        "capabilities": {},
+    }
     if not path.exists():
-        return {
-            "config_path": str(path),
-            "config_exists": False,
-            "provider": "auto",
-            "model": "",
-            "base_url": None,
-            "auto_context_length": 0,
-            "config_context_length": 0,
-            "effective_context_length": 0,
-            "capabilities": {},
-        }
+        return dict(empty)
     yaml = _load_yaml_module()
     try:
         cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception as e:
-        return {
-            "config_path": str(path),
-            "config_exists": True,
-            "error": str(e),
-            "provider": "auto",
-            "model": "",
-            "base_url": None,
-            "auto_context_length": 0,
-            "config_context_length": 0,
-            "effective_context_length": 0,
-            "capabilities": {},
-        }
+    except Exception:
+        return dict(empty)
     if not isinstance(cfg, dict):
         cfg = {}
     block = cfg.get("model")
@@ -168,8 +168,6 @@ def read_main_model() -> Dict[str, Any]:
     )
     caps = _resolve_capabilities(model=name or "", provider=prov)
     return {
-        "config_path": str(path),
-        "config_exists": True,
         "provider": prov,
         "model": name or "",
         "base_url": bu,
@@ -235,10 +233,10 @@ AUXILIARY_SLOTS: List[str] = [
     "title_generation",
 ]
 # Upstream `/api/model/auxiliary` shape is ``{task, provider, model, base_url}``
-# per slot. We keep ``api_key`` as a Hermes-Browser-Extension-only field so the
-# plugin can carry per-slot keys in ``<plugin-root>/.env`` — upstream doesn't
-# offer an equivalent.
-_AUX_SLOT_FIELDS = ("provider", "model", "base_url", "api_key")
+# per slot. Mirror that exactly — we used to carry an additive ``api_key``
+# field intended for per-slot credentials in ``<plugin-root>/.env``, but no
+# UI ever read or wrote it, so it was dead weight.
+_AUX_SLOT_FIELDS = ("provider", "model", "base_url")
 
 
 def _read_aux_slot(block: Dict[str, Any]) -> Dict[str, str]:
@@ -250,20 +248,22 @@ def _read_aux_slot(block: Dict[str, Any]) -> Dict[str, str]:
 
 
 def read_auxiliary_models() -> Dict[str, Any]:
-    """Return auxiliary-slot configuration in upstream-aligned shape.
+    """Return auxiliary-slot configuration matching upstream `/api/model/auxiliary`.
 
-    Output mirrors upstream ``GET /api/model/auxiliary``::
+    Output::
 
         {
           "tasks": [
-            {"task": "vision", "provider": "auto", "model": "", "base_url": "", "api_key": ""},
+            {"task": "vision", "provider": "auto", "model": "", "base_url": ""},
             ...
           ],
           "main": {"provider": "openrouter", "model": "anthropic/claude-opus-4.7"},
         }
 
-    The extra ``api_key`` per task is bridge-only (see ``_AUX_SLOT_FIELDS``
-    comment); upstream's task block doesn't include it.
+    Strictly upstream-aligned (no additive fields). YAML parse failures
+    are swallowed to empty values; the previous ``error`` /
+    ``config_path`` / ``config_exists`` diagnostic fields had no
+    consumers so they were dropped.
     """
     path = _config_yaml_path()
     empty_tasks: List[Dict[str, str]] = [
@@ -271,8 +271,6 @@ def read_auxiliary_models() -> Dict[str, Any]:
         for slot in AUXILIARY_SLOTS
     ]
     base: Dict[str, Any] = {
-        "config_path": str(path),
-        "config_exists": path.exists(),
         "tasks": empty_tasks,
         "main": {"provider": "", "model": ""},
     }
@@ -281,8 +279,8 @@ def read_auxiliary_models() -> Dict[str, Any]:
     yaml = _load_yaml_module()
     try:
         cfg = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except Exception as e:
-        return {**base, "config_exists": True, "error": str(e)}
+    except Exception:
+        return dict(base)
     if not isinstance(cfg, dict):
         cfg = {}
 
@@ -315,12 +313,7 @@ def read_auxiliary_models() -> Dict[str, Any]:
             "model": str(model_cfg) if model_cfg else "",
         }
 
-    return {
-        "config_path": str(path),
-        "config_exists": True,
-        "tasks": tasks,
-        "main": main,
-    }
+    return {"tasks": tasks, "main": main}
 
 
 def write_auxiliary_slot(
@@ -329,7 +322,6 @@ def write_auxiliary_slot(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     base_url: Optional[str] = None,
-    api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Write one auxiliary task slot. Param name ``task`` matches upstream."""
     task = task.strip()
@@ -362,7 +354,6 @@ def write_auxiliary_slot(
     _set_str(slot_block, "provider", provider)
     _set_str(slot_block, "model", model)
     _set_str(slot_block, "base_url", base_url)
-    _set_str(slot_block, "api_key", api_key)
 
     aux_block[task] = slot_block
     cfg["auxiliary"] = aux_block

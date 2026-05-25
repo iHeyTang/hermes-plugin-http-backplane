@@ -2,9 +2,10 @@
 
 Sub-modules:
 - ``cron``: ``/hermes/cron/*`` — wraps Hermes's cron module
-- ``settings``: ``/hermes/model-catalog``, ``/hermes/main-model``,
-  ``/hermes/auxiliary-models``, ``/hermes/provider-models``,
-  ``/hermes/main-provider-settings``, ``/hermes/memory``, ``/hermes/skills``
+- ``settings``: ``/hermes/model/info``, ``/hermes/model/auxiliary``,
+  ``/hermes/model/options``, ``/hermes/model/set``,
+  ``/hermes/provider-models``, ``/hermes/main-provider-settings``,
+  ``/hermes/memories``, ``/hermes/skills``
 - ``sessions``: ``/hermes/sessions/*`` — read-only view over
   ``hermes_state.SessionDB`` (the canonical conversation log)
 - ``attachments``: ``/hermes/attachments*`` — upload/delete conversation
@@ -26,7 +27,14 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from . import attachments, cron, integrations_admin, sessions, settings
+from . import (
+    attachments,
+    cron,
+    integrations_admin,
+    lifecycle,
+    sessions,
+    settings,
+)
 
 
 def register(app: web.Application) -> None:
@@ -36,3 +44,4 @@ def register(app: web.Application) -> None:
     sessions.register(app)
     attachments.register(app)
     integrations_admin.register(app)
+    lifecycle.register(app)
