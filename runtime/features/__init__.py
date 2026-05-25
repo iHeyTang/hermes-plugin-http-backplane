@@ -7,12 +7,13 @@ Two lanes:
   uploads) that the gateway doesn't expose itself. Mounted at
   ``/hermes/*``. Retired piecemeal as the gateway grows native
   equivalents.
-- ``integrations`` — agent-managed endpoints mounted at
+- ``integrations`` — agent-managed endpoints served under
   ``/integrations/<name>/*``. The loader (``integrations.loader``)
   discovers built-in presets plus user integrations under
-  ``~/.hermes/integrations/`` and feeds them to the same queue used
-  by ``register_integration``. The actual aiohttp sub-app mount is
-  done by ``integrations_mount`` at HTTP startup.
+  ``~/.hermes/integrations/`` and registers each via
+  :func:`runtime.api.register_integration`. The actual per-request
+  routing is done by the catch-all dispatcher in
+  :mod:`runtime.dispatch`.
 """
 
 from __future__ import annotations

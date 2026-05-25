@@ -1,7 +1,11 @@
 """HTTP application factory.
 
-Composes the backplane's HTTP surface from native feature lanes plus
-dynamically-registered integration plugins.
+Composes the backplane's HTTP surface from native feature lanes plus a
+single catch-all dispatcher for ``/integrations/<name>/*``. The
+dispatcher reads a runtime-mutable registry (see :mod:`runtime.api`),
+so register / replace / remove on integrations works at any time —
+boot, mid-flight, or post-tool-call — without re-touching the aiohttp
+Application.
 """
 
 from __future__ import annotations
@@ -9,10 +13,10 @@ from __future__ import annotations
 from aiohttp import web
 
 from .common import json_error
+from .dispatch import register_dispatcher
 from .features import register_native
 from .features.hermes_proxy.attachments.routes import max_client_size_bytes
 from .features.integrations import load_all as load_integrations
-from .integrations_mount import mount_all, teardown
 
 
 @web.middleware
@@ -40,17 +44,15 @@ def build_http_app() -> web.Application:
         middlewares=[cors_middleware], client_max_size=max_client_size_bytes()
     )
     register_native(app)
-    # Discover presets + user integrations and queue each via
-    # register_integration() before we drain. Errors in any single
-    # integration are logged + skipped inside load_all — they must not
-    # take the HTTP server down.
+    register_dispatcher(app)
+    # Populate the integration registry from built-in presets + user
+    # integrations under ~/.hermes/integrations/. Any failures inside
+    # a single integration are logged + skipped by load_all — must not
+    # take the HTTP server down. After this returns the app is safe to
+    # be frozen by AppRunner.setup(); subsequent register_integration
+    # calls (e.g. from integration_install) go straight to the runtime
+    # dict and become live on the next matching request.
     load_integrations()
-    # Drain the integration-registration queue and mount each onto
-    # /integrations/<name>/* as a sub-application. After this call, any
-    # subsequent register_integration() in the same process mounts
-    # immediately rather than queueing.
-    mount_all(app)
-    app.on_shutdown.append(teardown)
     app.router.add_route(
         "OPTIONS", "/{path_info:.*}", lambda _req: web.Response(status=204)
     )

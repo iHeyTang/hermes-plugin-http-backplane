@@ -10,18 +10,25 @@ The backplane owns ``/integrations/*`` end-to-end. It ships with built-in
 presets under ``runtime/features/integrations/presets/`` (e.g. ``lark``)
 and exposes four ``integration_*`` tools so the Hermes agent can write
 new integrations to ``~/.hermes/integrations/<name>/`` and hot-mount them
-via conversation. The legacy ``register_integration`` Python API still
-exists in ``runtime/api.py`` as the internal queue all paths funnel
-through; it is no longer the recommended way for outside code to add
-endpoints.
+via conversation. ``register_integration`` in ``runtime/api.py`` is the
+underlying API both paths funnel through.
 
-Architecture: the HTTP server runs in a **daemon thread** inside the
-Hermes process. Both presets and user integrations queue their routes
-into a Python list — that list MUST be in the same process where the
-HTTP server reads it.
+Architecture
+------------
+The HTTP server runs in a **daemon thread** inside the Hermes process
+with its own asyncio event loop — Hermes's main loop is untouched.
 
-The server thread owns its own asyncio event loop; Hermes's main loop
-is untouched. A panic in a route handler is caught by aiohttp and
+``/integrations/*`` routes do **not** use aiohttp sub-apps. Instead,
+a single catch-all route ``/integrations/{name}/{tail:.*}`` dispatches
+at request time against a runtime-mutable registry of
+``IntegrationRouter`` objects (see ``runtime/api.py``,
+``runtime/dispatch.py``). This dodges aiohttp's "frozen Application
+after AppRunner.setup()" constraint, so an integration registered any
+time — at boot, mid-flight via the install tool, or by a late-loading
+sibling plugin — is reachable on the next matching request without
+restarting the server.
+
+A panic in a route handler is caught by aiohttp / the dispatcher and
 returned as a 500, never propagating into the Hermes process.
 """
 
@@ -69,17 +76,12 @@ def _run_server_thread(port: int, ready: threading.Event, stop: threading.Event)
     asyncio.set_event_loop(loop)
 
     async def _main() -> None:
-        # Brief delay before building the app: Hermes loads plugins
-        # sequentially, and integrations registered after ours need time
-        # to call register_integration() (queueing into api._pending)
-        # BEFORE we call build_http_app(), which drains the queue and
-        # freezes the aiohttp app via AppRunner.setup(). Adding subapps
-        # to a frozen app fails. 500ms covers in-order plugin loading
-        # comfortably on a healthy machine; tighten or loosen via
-        # HERMES_BACKPLANE_STARTUP_DELAY_MS env var if needed.
-        delay_ms = int(os.environ.get("HERMES_BACKPLANE_STARTUP_DELAY_MS", "500"))
-        await asyncio.sleep(delay_ms / 1000)
-
+        # No startup delay needed: integrations live in a runtime-mutable
+        # registry (see runtime/api.py), and a single catch-all aiohttp
+        # route reads it at request time. Late register_integration calls
+        # — from sibling plugins loaded after us, or from the
+        # integration_install tool — take effect on the next matching
+        # request without touching the (potentially frozen) Application.
         app = build_http_app()
         runner = web.AppRunner(app)
         await runner.setup()
@@ -111,15 +113,13 @@ def _run_server_thread(port: int, ready: threading.Event, stop: threading.Event)
 def start_server() -> None:
     """Start the HTTP server in a daemon thread (idempotent).
 
-    DOES NOT block on server-ready: we MUST return before Hermes loads
-    the next plugin so any plugin that wants to queue routes via
-    ``register_integration()`` can do so while ``_app_ref`` is still
-    None. The server thread's own startup delay (default 500ms) gives
-    those queued integrations — plus the loader's own preset and user
-    discovery pass — time to land before ``build_http_app`` drains the
-    queue and freezes the app via ``AppRunner.setup()``. Blocking here
-    would invert that ordering and every integration would race into a
-    frozen app.
+    Returns immediately. We don't wait for server-ready because there's
+    no longer a reason to: integration registrations land in a runtime
+    dict (see runtime/api.py), and the dispatcher reads it per-request,
+    so plugins loaded after us can call ``register_integration`` at any
+    point and the routes go live without re-touching the aiohttp app.
+    Keeping this non-blocking also means Hermes's sequential plugin load
+    isn't slowed down by us binding the TCP port.
     """
     global _server_thread, _server_stop_event
     if _server_thread is not None and _server_thread.is_alive():
@@ -137,8 +137,7 @@ def start_server() -> None:
     )
     _server_thread.start()
     logger.info(
-        "hermes-plugin-http-backplane server thread spawned (port %d); HTTP comes up "
-        "after the startup-delay window expires (default 500ms)",
+        "hermes-plugin-http-backplane server thread spawned (port %d)",
         port,
     )
 

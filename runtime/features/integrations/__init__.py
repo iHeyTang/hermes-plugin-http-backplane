@@ -2,7 +2,7 @@
 
 The backplane owns ``/integrations/<name>/*`` end-to-end. Integrations are
 loaded from two roots, both flowing through the same ``register_integration``
-queue in ``runtime.api``:
+entry in ``runtime.api``:
 
 - **Presets** — shipped inside this package under ``presets/<name>/``.
 - **User integrations** — writable, at ``~/.hermes/integrations/<name>/``.
@@ -13,8 +13,10 @@ that exposes ``setup(router) -> None``.
 
 The public surface for callers in this package is:
 
-- :func:`load_all` — discover everything, register with the queue. Called
-  once during HTTP app boot, before :func:`integrations_mount.mount_all`.
+- :func:`load_all` — discover everything and register each via
+  :func:`runtime.api.register_integration`. Called once during HTTP app
+  boot, *after* the catch-all dispatcher has been mounted on the
+  aiohttp app (see :func:`runtime.dispatch.register_dispatcher`).
 - :data:`USER_INTEGRATIONS_DIR` — the writable directory, created on demand
   by the install tool.
 """

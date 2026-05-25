@@ -285,18 +285,24 @@ def _resolve_preset_path(name: str) -> str:
 
 
 def load_user_integration(name: str) -> LoadedIntegration:
-    """Load a single user integration (used by ``integration_install``).
+    """Load a single user integration (used by ``integration_install`` /
+    ``integration_reload``).
 
-    Returns the LoadedIntegration on success, or raises. Appends to the
-    global state so ``integration_list`` sees the new entry without a
-    full re-scan.
+    Returns the LoadedIntegration on success, or raises. Passes
+    ``replace=True`` to :func:`register_integration` so re-installing or
+    reloading an existing name atomically swaps the live router for the
+    freshly-imported one. Updates the global state so ``integration_list``
+    sees the new entry (or refreshed entry) without a full re-scan.
     """
     integration_dir = USER_INTEGRATIONS_DIR / name
     setup = _load_user(integration_dir)
     meta = _read_meta(integration_dir)
-    register_integration(name, setup)
+    register_integration(name, setup, replace=True)
     entry = LoadedIntegration(
         name=name, source="user", path=integration_dir, meta=meta
     )
+    # Replace any existing entry for this name in the snapshot so the
+    # loader's view stays in sync with the registry.
+    _state.loaded[:] = [e for e in _state.loaded if e.name != name]
     _state.loaded.append(entry)
     return entry
