@@ -1,13 +1,12 @@
 """Feature modules that compose the backplane's HTTP surface.
 
-Three lanes:
+Two lanes:
 
-- ``extension`` — routes that *only* the Hermes browser extension uses
-  (file attachment upload to workspace). Mounted at ``/extension/*``.
-- ``hermes_proxy`` — thin HTTP proxies over Hermes core APIs (cron,
-  model catalog, provider settings, memory, skills) that the gateway
-  doesn't expose itself. Mounted at ``/hermes/*``. Retired piecemeal
-  as the gateway grows native equivalents.
+- ``hermes_proxy`` — thin HTTP wrappers over Hermes core APIs (cron,
+  sessions, model catalog, provider settings, memory, skills, attachment
+  uploads) that the gateway doesn't expose itself. Mounted at
+  ``/hermes/*``. Retired piecemeal as the gateway grows native
+  equivalents.
 - ``integrations`` — agent-managed endpoints mounted at
   ``/integrations/<name>/*``. The loader (``integrations.loader``)
   discovers built-in presets plus user integrations under
@@ -20,10 +19,9 @@ from __future__ import annotations
 
 from aiohttp import web
 
-from . import extension, hermes_proxy
+from . import hermes_proxy
 
 
 def register_native(app: web.Application) -> None:
-    """Register the two native lanes (extension + hermes_proxy)."""
-    extension.register(app)
+    """Register the native hermes_proxy lane."""
     hermes_proxy.register(app)

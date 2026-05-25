@@ -1,9 +1,9 @@
 """
 hermes-plugin-http-backplane — HTTP server plugin for Hermes Agent.
 
-Hosts three lanes of HTTP routes:
-- ``/extension/*``     — extension-private (file attach)
-- ``/hermes/*``        — proxies to Hermes core (cron, model catalog, …)
+Hosts two lanes of HTTP routes:
+- ``/hermes/*``        — wrappers over Hermes core (cron, sessions, model
+                          catalog, settings, memory, skills, attachments)
 - ``/integrations/*``  — agent-managed endpoints
 
 The backplane owns ``/integrations/*`` end-to-end. It ships with built-in
@@ -87,7 +87,7 @@ def _run_server_thread(port: int, ready: threading.Event, stop: threading.Event)
         await site.start()
         logger.info(
             "hermes-plugin-http-backplane HTTP on http://127.0.0.1:%d — "
-            "/extension/*, /hermes/*, /integrations/{name}/*",
+            "/hermes/*, /integrations/{name}/*",
             port,
         )
         ready.set()

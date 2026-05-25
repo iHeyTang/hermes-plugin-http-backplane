@@ -10,7 +10,7 @@ from aiohttp import web
 
 from .common import json_error
 from .features import register_native
-from .features.extension.routes import max_client_size_bytes
+from .features.hermes_proxy.attachments.routes import max_client_size_bytes
 from .features.integrations import load_all as load_integrations
 from .integrations_mount import mount_all, teardown
 

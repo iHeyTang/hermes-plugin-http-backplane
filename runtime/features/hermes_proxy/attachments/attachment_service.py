@@ -14,7 +14,7 @@ import secrets
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ...adapters.hermes_core import hermes_home
+from ....adapters.hermes_core import hermes_home
 
 PLUGIN_NAME = "hermes-plugin-http-backplane"
 MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
@@ -87,7 +87,7 @@ def delete_attachment(path: str) -> Dict[str, Any]:
     """Best-effort deletion of a previously-uploaded attachment file.
 
     Refuses any path that doesn't resolve under the attachments root, so a
-    malformed extension request can't ask us to unlink arbitrary disk paths.
+    malformed client request can't ask us to unlink arbitrary disk paths.
     """
     if not path:
         return {"deleted": False, "reason": "missing path"}
@@ -113,7 +113,7 @@ def delete_attachment(path: str) -> Dict[str, Any]:
 
 
 def delete_attachment_session(session_id: str) -> Dict[str, Any]:
-    """Wipe every attachment uploaded for a side-panel chat session."""
+    """Wipe every attachment uploaded for a chat session."""
     if not session_id:
         return {"deleted": False, "reason": "missing session_id"}
     safe = _SESSION_ID_SAFE_RE.sub("_", session_id).strip("_") or "default"

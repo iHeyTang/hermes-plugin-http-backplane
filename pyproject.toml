@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hermes-plugin-http-backplane"
 version = "0.1.0"
-description = "HTTP backplane plugin for Hermes Agent — hosts /extension/*, /hermes/*, and /integrations/{name}/* lanes."
+description = "HTTP backplane plugin for Hermes Agent — hosts /hermes/* (cron, sessions, settings, attachments, …) and /integrations/{name}/* lanes."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
@@ -25,8 +25,8 @@ packages = [
     "hermes_plugin_http_backplane.runtime",
     "hermes_plugin_http_backplane.runtime.adapters",
     "hermes_plugin_http_backplane.runtime.features",
-    "hermes_plugin_http_backplane.runtime.features.extension",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy",
+    "hermes_plugin_http_backplane.runtime.features.hermes_proxy.attachments",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.cron",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.sessions",
     "hermes_plugin_http_backplane.runtime.features.hermes_proxy.settings",

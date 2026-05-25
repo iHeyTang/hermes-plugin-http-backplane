@@ -4,7 +4,7 @@ from urllib.parse import unquote
 
 from aiohttp import web
 
-from ...common import json_error
+from ....common import json_error
 from .attachment_service import (
     MAX_ATTACHMENT_BYTES,
     build_attachment_upload_response,
@@ -37,7 +37,7 @@ async def handle_attach_upload(request: web.Request) -> web.Response:
 
 
 async def handle_attach_delete(request: web.Request) -> web.Response:
-    """DELETE /extension/attach?path=<absolute-path>"""
+    """DELETE /hermes/attachments?path=<absolute-path>"""
     path = request.query.get("path", "")
     try:
         return web.json_response(delete_attachment(path))
@@ -46,7 +46,7 @@ async def handle_attach_delete(request: web.Request) -> web.Response:
 
 
 async def handle_attach_delete_session(request: web.Request) -> web.Response:
-    """DELETE /extension/attach/session/{session_id}"""
+    """DELETE /hermes/attachments/session/{session_id}"""
     session_id = request.match_info.get("session_id", "")
     try:
         return web.json_response(delete_attachment_session(session_id))
@@ -61,10 +61,10 @@ def max_client_size_bytes() -> int:
 def register(app: web.Application) -> None:
     app.add_routes(
         [
-            web.post("/extension/attach", handle_attach_upload),
-            web.delete("/extension/attach", handle_attach_delete),
+            web.post("/hermes/attachments", handle_attach_upload),
+            web.delete("/hermes/attachments", handle_attach_delete),
             web.delete(
-                "/extension/attach/session/{session_id}",
+                "/hermes/attachments/session/{session_id}",
                 handle_attach_delete_session,
             ),
         ]
