@@ -1,0 +1,50 @@
+name: CI
+
+# Lightweight sanity check per push / PR against ``main``:
+#   - py_compile every .py file (catches syntax errors)
+#   - ruff check (lint + import sanity), but only if pyproject.toml
+#     declares a ruff config; otherwise skip to avoid opinionated noise
+#
+# No real test suite exists yet; this is the floor, not a ceiling.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  py:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Syntax check (py_compile every .py)
+        run: |
+          # Excludes the standard caches. ``-q`` keeps the log focused on
+          # actual failures; py_compile exits non-zero on the first error.
+          find . -name '*.py' \
+            -not -path './.git/*' \
+            -not -path '*/__pycache__/*' \
+            -print0 \
+            | xargs -0 python -m py_compile
+
+      - name: Ruff (lint), if configured
+        run: |
+          if grep -q '\[tool\.ruff\]' pyproject.toml 2>/dev/null; then
+            pip install ruff
+            ruff check .
+          else
+            echo "No [tool.ruff] section in pyproject.toml — skipping ruff."
+          fi

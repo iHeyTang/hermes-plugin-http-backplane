@@ -1,0 +1,59 @@
+name: Release
+
+# Hermes plugins are installed by ``hermes plugins install owner/repo``
+# which git-clones this repo directly — no build artifact to ship.
+# This workflow exists to:
+#   1. Pin a tag → GitHub Release with auto-generated notes so users have
+#      a stable version reference
+#   2. Re-run the CI sanity check on the tagged commit so the release
+#      doesn't silently ship broken syntax
+#
+# Cut a release: bump version in pyproject.toml + plugin.yaml,
+# commit, then ``git tag vX.Y.Z && git push --tags``.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # required by softprops/action-gh-release
+
+jobs:
+  sanity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Syntax check
+        run: |
+          find . -name '*.py' \
+            -not -path './.git/*' \
+            -not -path '*/__pycache__/*' \
+            -print0 \
+            | xargs -0 python -m py_compile
+
+  release:
+    needs: sanity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history so release notes can diff prev tag
+
+      - name: Verify tag matches pyproject.toml version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/v}"
+          PYPROJECT_VER=$(grep -E '^version\s*=' pyproject.toml | head -1 | sed -E 's/version\s*=\s*"([^"]+)"/\1/')
+          MANIFEST_VER=$(grep -E '^version:' plugin.yaml | head -1 | awk '{print $2}')
+          echo "Tag: $TAG · pyproject: $PYPROJECT_VER · plugin.yaml: $MANIFEST_VER"
+          if [[ "$TAG" != "$PYPROJECT_VER" ]] || [[ "$TAG" != "$MANIFEST_VER" ]]; then
+            echo "::error::Tag $TAG doesn't match pyproject.toml ($PYPROJECT_VER) or plugin.yaml ($MANIFEST_VER)."
+            exit 1
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
