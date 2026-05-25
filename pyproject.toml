@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hermes-plugin-http-backplane"
+version = "0.1.0"
+description = "HTTP backplane plugin for Hermes Agent — hosts /extension/*, /hermes/*, and /integrations/{name}/* lanes."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "iHeyTang" }]
+dependencies = [
+    "aiohttp>=3.10",
+    "pyyaml>=6.0",
+]
+
+[project.entry-points."hermes_agent.plugins"]
+hermes-plugin-http-backplane = "hermes_plugin_http_backplane"
+
+[tool.setuptools]
+package-dir = { "hermes_plugin_http_backplane" = "." }
+packages = [
+    "hermes_plugin_http_backplane",
+    "hermes_plugin_http_backplane.runtime",
+    "hermes_plugin_http_backplane.runtime.adapters",
+    "hermes_plugin_http_backplane.runtime.features",
+    "hermes_plugin_http_backplane.runtime.features.extension",
+    "hermes_plugin_http_backplane.runtime.features.hermes_proxy",
+    "hermes_plugin_http_backplane.runtime.features.hermes_proxy.cron",
+    "hermes_plugin_http_backplane.runtime.features.hermes_proxy.sessions",
+    "hermes_plugin_http_backplane.runtime.features.hermes_proxy.settings",
+    "hermes_plugin_http_backplane.runtime.features.integrations",
+    "hermes_plugin_http_backplane.runtime.features.integrations.presets",
+    "hermes_plugin_http_backplane.runtime.features.integrations.presets.lark",
+]
+include-package-data = true
+
+[tool.setuptools.package-data]
+"hermes_plugin_http_backplane.runtime.features.integrations.presets.lark" = ["integration.yaml"]

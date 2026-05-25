@@ -1,0 +1,17 @@
+manifest_version: 1
+name: hermes-plugin-http-backplane
+version: 0.1.0
+description: >
+  Hermes plugin that hosts a local HTTP server for clients (browser
+  extensions, future apps). Owns /integrations/<name>/* end-to-end:
+  ships built-in presets (e.g. lark) and exposes integration_* tools
+  so the agent can install, list, remove, and reload user-defined
+  integrations under ~/.hermes/integrations/ via conversation.
+author: "iHeyTang"
+kind: standalone
+provides_tools:
+  - integration_list
+  - integration_install
+  - integration_remove
+  - integration_reload
+hooks: []

@@ -1,0 +1,13 @@
+name: lark
+version: 0.1.0
+description: >
+  Wraps the lark-cli subprocess to expose unified Feishu search
+  (group chats, people, docs) at /integrations/lark/search.
+endpoints:
+  - path: /search
+    method: GET
+    query:
+      q: { type: string, required: true, description: "Search term" }
+      limit: { type: int, default: 8, description: "Max results per category" }
+requires:
+  binaries: [lark-cli]
