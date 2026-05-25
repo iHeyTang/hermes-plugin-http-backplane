@@ -1,22 +1,24 @@
-"""``hermes-integration`` — operator-facing CLI for backplane integrations.
+"""``hermes integration`` — operator-facing subcommand for backplane integrations.
 
-Lives independently of the running Hermes agent: file work happens
-locally against ``~/.hermes/integrations/``; when the backplane HTTP
-server is reachable on the local port, the file-changing subcommands
-also trigger a live re-register so changes take effect immediately.
-Backplane down → file work still applies on the next backplane start,
-and the CLI prints a one-liner to that effect.
+Wired into Hermes's umbrella CLI via ``ctx.register_cli_command(...)`` at
+plugin load time; see :func:`hermes_plugin_http_backplane.register`. The
+two exports the plugin glue cares about are:
 
-The CLI does NOT depend on the Hermes agent package or its plugin
-registry. It imports the backplane's :mod:`runtime.features.integrations.manager`
-for in-process operations (used when the backplane is down) and talks
-HTTP to the running backplane otherwise.
+- :func:`register_subparser` — Hermes hands us an ``argparse`` subparser
+  for the ``integration`` command; this function populates it with
+  ``list / install / remove / reload`` sub-subparsers and wires each
+  one's ``func`` to a dispatcher below.
+- :func:`run` — fallback handler when the user types ``hermes integration``
+  with no subcommand. Just prints help.
 
-Subcommands:
-    list              snapshot of what's currently registered
-    install <name>    write files + (if backplane is up) re-register
-    remove <name>     delete files + (if backplane is up) unregister
-    reload <name>     re-import + atomically swap router (needs backplane)
+Designed so the same process the CLI runs in does NOT need the backplane
+HTTP server up:
+
+- ``list``, ``install``, ``remove`` fall back to the in-process manager
+  when the backplane isn't reachable (file work still happens; live
+  swap is skipped with a printed note)
+- ``reload`` needs the backplane (it re-imports + swaps the live router),
+  so it errors out cleanly if the port is dead
 """
 
 from __future__ import annotations
@@ -85,6 +87,10 @@ def _backplane_alive() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _as_json(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "json", False))
+
+
 def _emit(data: Any, *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(data, ensure_ascii=False, indent=2))
@@ -121,28 +127,28 @@ def _emit_list(payload: Dict[str, Any], *, as_json: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Subcommand implementations
+# Subcommand dispatchers
 # ---------------------------------------------------------------------------
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
     status, data, err = _http("GET", "/hermes/integrations")
     if status is None:
-        # Backplane down: fall back to local manager so the CLI is still
-        # useful for "what's on disk" inspection.
+        # Backplane down: fall back to in-process manager so the CLI is
+        # still useful for "what's on disk" inspection.
         from .runtime.features.integrations import manager
 
-        _emit_list(manager.list_integrations(), as_json=args.json)
+        _emit_list(manager.list_integrations(), as_json=_as_json(args))
         return 0
     if status >= 400 or data is None:
         print(f"list failed: {err or status}", file=sys.stderr)
         return 1
-    _emit_list(data, as_json=args.json)
+    _emit_list(data, as_json=_as_json(args))
     return 0
 
 
 def _read_file_arg(value: Optional[str]) -> Optional[str]:
-    """``@-prefix`` means read from a file, else literal string. Sentinel ``-`` → stdin."""
+    """``@-prefix`` means read from a file, ``-`` means stdin, else literal."""
     if value is None:
         return None
     if value == "-":
@@ -179,13 +185,16 @@ def _cmd_install(args: argparse.Namespace) -> int:
             "POST", f"/hermes/integrations/reload?name={args.name}"
         )
         if status == 200 and data is not None:
-            reload_info = {"reloaded": True, **{k: data.get(k) for k in ("mount", "path", "meta")}}
+            reload_info = {
+                "reloaded": True,
+                **{k: data.get(k) for k in ("mount", "path", "meta")},
+            }
         else:
             reload_info = {"reloaded": False, "reason": err or f"HTTP {status}"}
 
     payload = {**result, "live": reload_info}
-    _emit(payload, as_json=args.json)
-    if not args.json and not reload_info["reloaded"]:
+    _emit(payload, as_json=_as_json(args))
+    if not _as_json(args) and not reload_info["reloaded"]:
         print(
             f"  (changes will apply on next backplane start: "
             f"{reload_info['reason']})",
@@ -200,7 +209,7 @@ def _cmd_remove(args: argparse.Namespace) -> int:
         # AND deletes the files. Keeps the live view consistent with disk.
         status, data, err = _http("DELETE", f"/hermes/integrations/{args.name}")
         if status == 200 and data is not None:
-            _emit(data, as_json=args.json)
+            _emit(data, as_json=_as_json(args))
             return 0
         if status is not None:
             print(f"remove failed: {err or status}", file=sys.stderr)
@@ -214,7 +223,7 @@ def _cmd_remove(args: argparse.Namespace) -> int:
     except manager.IntegrationError as exc:
         print(f"remove failed: {exc}", file=sys.stderr)
         return 1
-    _emit(result, as_json=args.json)
+    _emit(result, as_json=_as_json(args))
     return 0
 
 
@@ -229,86 +238,99 @@ def _cmd_reload(args: argparse.Namespace) -> int:
         return 2
     status, data, err = _http("POST", f"/hermes/integrations/reload?name={args.name}")
     if status == 200 and data is not None:
-        _emit(data, as_json=args.json)
+        _emit(data, as_json=_as_json(args))
         return 0
     print(f"reload failed: {err or status}", file=sys.stderr)
     return 1
 
 
 # ---------------------------------------------------------------------------
-# Parser
+# Hermes CLI integration
 # ---------------------------------------------------------------------------
 
 
-def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="hermes-integration",
-        description=(
-            "Manage user-installed Hermes backplane integrations "
-            "(~/.hermes/integrations/<name>/). Operator-facing — not "
-            "intended for agent invocation."
-        ),
-    )
-    p.add_argument(
+def register_subparser(parser: argparse.ArgumentParser) -> None:
+    """Populate the ``hermes integration`` subparser.
+
+    Called by Hermes once at plugin load time. The shape:
+
+        hermes integration [--json] {list|install|remove|reload} ...
+
+    Each sub-subparser sets its own ``func`` via ``set_defaults`` so the
+    Hermes CLI dispatcher invokes it directly.
+    """
+    parser.add_argument(
         "--json", action="store_true", help="emit machine-readable JSON"
     )
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest="integration_cmd")
 
-    sub.add_parser("list", help="show what's currently registered")
+    p_list = sub.add_parser("list", help="show what's currently registered")
+    p_list.set_defaults(func=_cmd_list)
 
-    inst = sub.add_parser(
+    p_install = sub.add_parser(
         "install", help="write integration files + register if backplane is up"
     )
-    inst.add_argument("name", help="URL-safe name; matches ^[a-z][a-z0-9-]*$")
-    inst.add_argument(
+    p_install.add_argument(
+        "name", help="URL-safe name; matches ^[a-z][a-z0-9-]*$"
+    )
+    p_install.add_argument(
         "--from-path",
         help=(
             "copy this directory verbatim into ~/.hermes/integrations/<name>/ "
             "(takes precedence over --handler-py / --init-py / --yaml)"
         ),
     )
-    inst.add_argument(
+    p_install.add_argument(
         "--handler-py",
         help=(
             "contents of handler.py; literal text, '@path' to read from a "
             "file, or '-' to read from stdin"
         ),
     )
-    inst.add_argument(
+    p_install.add_argument(
         "--init-py",
         help="contents of __init__.py; defaults to 'from .handler import setup'",
     )
-    inst.add_argument(
+    p_install.add_argument(
         "--yaml", help="contents of integration.yaml (metadata); optional"
     )
-    inst.add_argument(
+    p_install.add_argument(
         "--overwrite",
         action="store_true",
         help="replace an existing integration with the same name",
     )
+    p_install.set_defaults(func=_cmd_install)
 
-    rm = sub.add_parser("remove", help="delete files + unregister routes")
-    rm.add_argument("name")
+    p_remove = sub.add_parser("remove", help="delete files + unregister routes")
+    p_remove.add_argument("name")
+    p_remove.set_defaults(func=_cmd_remove)
 
-    rel = sub.add_parser(
+    p_reload = sub.add_parser(
         "reload", help="re-import + atomically swap the live router"
     )
-    rel.add_argument("name")
-
-    return p
-
-
-def main(argv: Optional[list[str]] = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
-    dispatch = {
-        "list": _cmd_list,
-        "install": _cmd_install,
-        "remove": _cmd_remove,
-        "reload": _cmd_reload,
-    }
-    return dispatch[args.cmd](args)
+    p_reload.add_argument("name")
+    p_reload.set_defaults(func=_cmd_reload)
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+def run(args: argparse.Namespace) -> int:
+    """Fallback handler when ``hermes integration`` is invoked without a sub-subcommand.
+
+    With nothing to do, print a hint to stderr and exit non-zero so
+    shell scripts can detect the no-op.
+    """
+    if getattr(args, "integration_cmd", None):
+        # set_defaults(func=...) on the sub-subparsers takes precedence,
+        # so reaching here with a chosen sub-subcommand means the dispatcher
+        # didn't route — defensive log + non-zero exit.
+        print(
+            f"hermes integration: internal dispatch miss for "
+            f"{args.integration_cmd!r}",
+            file=sys.stderr,
+        )
+        return 2
+    print(
+        "hermes integration: no subcommand given. "
+        "Try `hermes integration --help` to see list / install / remove / reload.",
+        file=sys.stderr,
+    )
+    return 2

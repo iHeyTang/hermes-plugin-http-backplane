@@ -3,7 +3,8 @@
 Pure manager layer: list / install / remove / reload, returning plain
 dicts and raising plain exceptions. Two callers wrap this:
 
-- :mod:`hermes_plugin_http_backplane.cli` — operator-facing CLI
+- :mod:`hermes_plugin_http_backplane.cli` — the ``hermes integration``
+  CLI subcommand, registered on Hermes via ``ctx.register_cli_command``
 - :mod:`runtime.features.hermes_proxy.integrations_admin.routes` —
   HTTP admin endpoints that the CLI talks to when the backplane is up
 

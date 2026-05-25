@@ -3,9 +3,9 @@ name: integration-management
 description: >
   Help the user add, inspect, or remove HTTP backplane integrations
   served under /integrations/<name>/* by hermes-plugin-http-backplane.
-  Lifecycle is operator-driven via the hermes-integration CLI; this
-  skill teaches the assistant how to scaffold the code and hand off
-  the install command, NOT to install anything directly.
+  Lifecycle is operator-driven via the `hermes integration` subcommand
+  (CLI); this skill teaches the assistant how to scaffold the code and
+  hand off the install command, NOT to install anything directly.
 when_to_use: >
   User asks to "add", "create", "wire up", or "install" a new
   integration for an external service (lark, slack, zendesk, …) under
@@ -45,7 +45,7 @@ def setup(router) -> None:
     router.add_get("/search", handle_search)
 ```
 
-Optional `integration.yaml` for metadata shown by `hermes-integration list`:
+Optional `integration.yaml` for metadata shown by `hermes integration list`:
 
 ```yaml
 version: 0.1.0
@@ -69,27 +69,27 @@ path params.
 
 ```bash
 # Install from a directory you already have on disk
-hermes-integration install my-tool --from-path ./my-tool/
+hermes integration install my-tool --from-path ./my-tool/
 
 # Install inline (read each file with @path)
-hermes-integration install my-tool \
+hermes integration install my-tool \
   --handler-py @handler.py \
   --yaml @integration.yaml
 
 # Replace an existing integration of the same name
-hermes-integration install my-tool --from-path ./my-tool/ --overwrite
+hermes integration install my-tool --from-path ./my-tool/ --overwrite
 ```
 
-3. Verify with `hermes-integration list`. The integration is reachable
+3. Verify with `hermes integration list`. The integration is reachable
    at `http://127.0.0.1:9394/integrations/<name>/...` as soon as the
    CLI prints `live.reloaded: true`.
 
 ## Other lifecycle commands
 
 ```bash
-hermes-integration list                      # show registered + failed
-hermes-integration reload my-tool            # pick up source edits
-hermes-integration remove my-tool            # delete files + unregister
+hermes integration list                      # show registered + failed
+hermes integration reload my-tool            # pick up source edits
+hermes integration remove my-tool            # delete files + unregister
 ```
 
 `reload` requires a running backplane. `install` / `remove` work

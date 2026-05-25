@@ -18,8 +18,9 @@ dependencies = [
 [project.entry-points."hermes_agent.plugins"]
 hermes-plugin-http-backplane = "hermes_plugin_http_backplane"
 
-[project.scripts]
-hermes-integration = "hermes_plugin_http_backplane.cli:main"
+# No [project.scripts]: the operator CLI is registered as a Hermes
+# subcommand (`hermes integration ...`) via ctx.register_cli_command in
+# the plugin's register() entry point — see __init__.py and cli.py.
 
 [tool.setuptools]
 package-dir = { "hermes_plugin_http_backplane" = "." }

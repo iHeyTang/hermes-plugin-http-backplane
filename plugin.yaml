@@ -8,8 +8,8 @@ description: >
   attachments) and serves /integrations/<name>/* for built-in presets
   (e.g. lark) plus user integrations under ~/.hermes/integrations/.
   Integration lifecycle (install / remove / reload / list) is operator-
-  facing: use the standalone ``hermes-integration`` CLI shipped by this
-  package, not agent tools.
+  facing: use the ``hermes integration ...`` subcommand registered by
+  this plugin, not agent tools.
 author: "iHeyTang"
 kind: standalone
 provides_tools: []

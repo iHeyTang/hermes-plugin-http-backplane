@@ -160,16 +160,41 @@ atexit.register(stop_server)
 
 
 def register(ctx) -> None:
-    """Hermes plugin entry point: start the HTTP server.
+    """Hermes plugin entry point: start the HTTP server + wire the
+    ``hermes integration`` CLI subcommand.
 
     No agent tools are registered. Integration lifecycle (install /
-    remove / reload / list) is operator-facing and lives in the
-    standalone ``hermes-integration`` CLI plus the loopback admin
-    endpoints under ``/hermes/integrations/*`` that the CLI talks to.
-    Built-in presets (e.g. ``lark``) are discovered and registered
-    during HTTP-app boot — see ``runtime/features/integrations``.
+    remove / reload / list) is operator-facing and exposed as the
+    ``hermes integration ...`` subcommand of the umbrella ``hermes``
+    CLI, which talks over loopback HTTP to the admin endpoints under
+    ``/hermes/integrations/*``. Built-in presets (e.g. ``lark``) are
+    discovered and registered during HTTP-app boot — see
+    ``runtime/features/integrations``.
+
+    ``register_cli_command`` and ``register_tool`` both come through
+    ``ctx`` but target different surfaces: tool registration exposes a
+    capability to the LLM (wrong layer for lifecycle), while CLI
+    registration just plugs into Hermes's argparse tree (correct layer).
     """
-    del ctx  # unused; kept for plugin-protocol compatibility
     logger.info("Registering hermes-plugin-http-backplane")
     start_server()
-    logger.info("hermes-plugin-http-backplane loaded (HTTP server only)")
+
+    from . import cli as _cli
+
+    ctx.register_cli_command(
+        name="integration",
+        help="Manage HTTP backplane integrations (list / install / remove / reload)",
+        setup_fn=_cli.register_subparser,
+        handler_fn=_cli.run,
+        description=(
+            "Operator-facing lifecycle commands for user integrations "
+            "served at /integrations/<name>/* on the local HTTP backplane "
+            "(default 127.0.0.1:9394). When the backplane is reachable, "
+            "file-changing subcommands also trigger a live re-register "
+            "so changes take effect without restarting Hermes."
+        ),
+    )
+
+    logger.info(
+        "hermes-plugin-http-backplane loaded (HTTP server + `hermes integration` CLI)"
+    )

@@ -11,8 +11,8 @@ Sub-modules:
   attachments, persisted under
   ``<hermes_home>/plugins/hermes-plugin-http-backplane/attachments/<session>/``
 - ``integrations_admin``: ``/hermes/integrations*`` — lifecycle admin
-  for ``/integrations/<name>/*``; called by the ``hermes-integration``
-  CLI, NOT exposed as agent tools
+  for ``/integrations/<name>/*``; called by the ``hermes integration``
+  CLI subcommand, NOT exposed as agent tools
 
 These wrap ``hermes_state`` / ``cron.jobs`` etc. as Python libraries
 directly. That makes them available whenever the backplane is loaded —

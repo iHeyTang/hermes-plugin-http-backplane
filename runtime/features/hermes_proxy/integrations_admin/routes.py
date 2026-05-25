@@ -1,4 +1,4 @@
-"""HTTP surface for the ``hermes-integration`` CLI.
+"""HTTP surface for the ``hermes integration`` CLI subcommand.
 
 Three endpoints, all under ``/hermes/integrations/`` (distinct from the
 runtime dispatch prefix ``/integrations/<name>/`` so admin actions can't
