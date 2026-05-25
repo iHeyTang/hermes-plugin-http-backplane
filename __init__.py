@@ -64,6 +64,74 @@ def _get_port() -> int:
     return int(os.environ.get("HERMES_BACKPLANE_PORT", "9394"))
 
 
+# Mirrors hermes_cli.main._AGENT_COMMANDS / _AGENT_SUBCOMMANDS as of
+# hermes-agent main.py:10678. Sync if Hermes adds a new long-running
+# mode. A miss here means "client tries to reach the backplane, gets
+# connection refused" — fail-loud, easy to spot. A false positive just
+# spins up an unused server thread that will silently lose the port-bind
+# race with the actually-serving process, which is harmless.
+_HERMES_AGENT_COMMANDS = frozenset({None, "chat", "acp", "rl"})
+_HERMES_AGENT_SUBCOMMANDS = {
+    "cron": frozenset({"run", "tick"}),
+    "gateway": frozenset({"run"}),
+    "mcp": frozenset({"serve"}),
+}
+
+
+def _first_positional(argv: list[str]) -> Optional[str]:
+    """Best-effort: skip leading ``-flag`` / ``--flag`` tokens, return the
+    first positional, or None if there isn't one.
+
+    Doesn't try to understand flag/value pairings (``--foo bar``) — that
+    would couple us to Hermes's full flag taxonomy. Worst case for a
+    flag-with-value: we treat the value as the subcommand, see it's not
+    an agent command, and skip server startup. The actually-running
+    Hermes process in the other terminal still has the server up, so
+    nothing breaks; the CLI still hits it over HTTP.
+    """
+    for tok in argv:
+        if tok.startswith("-"):
+            continue
+        return tok
+    return None
+
+
+def _is_agent_invocation() -> bool:
+    """True when sys.argv suggests this process is going to run an agent.
+
+    Used to gate ``start_server()`` so one-shot CLI invocations
+    (``hermes integration list``, ``hermes plugins …``, etc.) don't
+    bother spinning up an HTTP server thread that will just contend for
+    port 9394 with whichever process is actually serving.
+
+    ``HERMES_BACKPLANE_FORCE_START=1`` overrides the heuristic for
+    testing / debugging.
+    """
+    if os.environ.get("HERMES_BACKPLANE_FORCE_START") == "1":
+        return True
+    argv = _sys.argv[1:]
+    # Defense in depth: Hermes itself short-circuits --help / --version
+    # before discover_plugins runs, so register() shouldn't be called in
+    # those paths. If it IS, don't waste cycles on a server thread.
+    if any(tok in {"-h", "--help", "-V", "--version"} for tok in argv):
+        return False
+    first = _first_positional(argv)
+    if first in _HERMES_AGENT_COMMANDS:
+        # ``None`` matches bare ``hermes`` (defaults to chat) per
+        # hermes_cli's own taxonomy.
+        return True
+    valid_sub = _HERMES_AGENT_SUBCOMMANDS.get(first or "")
+    if valid_sub is None:
+        return False
+    # Find the sub-subcommand after ``first``: e.g. ``hermes cron run``.
+    try:
+        idx = argv.index(first) + 1  # type: ignore[arg-type]
+    except ValueError:
+        return False
+    sub = _first_positional(argv[idx:])
+    return sub in valid_sub
+
+
 def _run_server_thread(port: int, ready: threading.Event, stop: threading.Event) -> None:
     """Body of the daemon thread: bring up aiohttp on its own event loop."""
     import asyncio
@@ -111,7 +179,7 @@ def _run_server_thread(port: int, ready: threading.Event, stop: threading.Event)
 
 
 def start_server() -> None:
-    """Start the HTTP server in a daemon thread (idempotent).
+    """Start the HTTP server in a daemon thread (idempotent + mode-gated).
 
     Returns immediately. We don't wait for server-ready because there's
     no longer a reason to: integration registrations land in a runtime
@@ -120,9 +188,22 @@ def start_server() -> None:
     point and the routes go live without re-touching the aiohttp app.
     Keeping this non-blocking also means Hermes's sequential plugin load
     isn't slowed down by us binding the TCP port.
+
+    No-op when :func:`_is_agent_invocation` says the current process is
+    a one-shot CLI (``hermes integration list``, etc.) — it would just
+    contend for the port with the actually-serving process and lose.
+    Bypass with ``HERMES_BACKPLANE_FORCE_START=1``.
     """
     global _server_thread, _server_stop_event
     if _server_thread is not None and _server_thread.is_alive():
+        return
+
+    if not _is_agent_invocation():
+        logger.debug(
+            "hermes-plugin-http-backplane: skipping server start "
+            "(CLI-only invocation: argv=%r)",
+            _sys.argv[1:],
+        )
         return
 
     port = _get_port()
