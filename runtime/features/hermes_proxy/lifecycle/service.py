@@ -257,7 +257,7 @@ def _configured_gateway_platforms() -> Optional[set]:
         return None
 
 
-def _update_check() -> Dict[str, Any]:
+def _update_check(force: bool = False) -> Dict[str, Any]:
     """Cheap "is there a new Hermes version?" query.
 
     Delegates to upstream ``hermes_cli.banner.check_for_updates`` which
@@ -270,7 +270,16 @@ def _update_check() -> Dict[str, Any]:
     - ``behind`` + ``commits_behind`` (int) when count is known, else
       ``commits_behind: None`` (just "update available")
     - ``unknown``: the upstream check failed or couldn't run
+
+    When ``force`` is true, the 6h cache file is deleted before the
+    upstream check runs so the user gets a fresh remote probe — used by
+    the Status page's Refresh button.
     """
+    if force:
+        try:
+            (hermes_home() / ".update_check").unlink(missing_ok=True)
+        except OSError:
+            pass
     helpers = _safe_import(
         "hermes_cli.banner", "check_for_updates", "UPDATE_AVAILABLE_NO_COUNT"
     )
@@ -293,18 +302,23 @@ def _update_check() -> Dict[str, Any]:
         return {"status": "behind", "commits_behind": None}
 
 
-async def status_response() -> Dict[str, Any]:
+async def status_response(force_update_check: bool = False) -> Dict[str, Any]:
     """Build the ``GET /hermes/status`` payload (upstream-aligned).
 
     Async because we may want to do a remote gateway health-probe in
     the future; for now everything is synchronous-in-a-thread-pool so
     we don't block the event loop on DB / filesystem reads.
+
+    ``force_update_check`` busts the 6h update-check cache; only the
+    explicit user-triggered Refresh sets it, the auto-poll uses cache.
     """
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _build_status_sync)
+    return await loop.run_in_executor(
+        None, _build_status_sync, force_update_check
+    )
 
 
-def _build_status_sync() -> Dict[str, Any]:
+def _build_status_sync(force_update_check: bool = False) -> Dict[str, Any]:
     version, release_date = _version_info()
     cfg_v, latest_cfg_v = _config_version_info()
     config_path, env_path = _config_and_env_paths()
@@ -350,5 +364,5 @@ def _build_status_sync() -> Dict[str, Any]:
         "gateway_exit_reason": gateway_exit_reason,
         "gateway_updated_at": gateway_updated_at,
         "active_sessions": _active_session_count(),
-        "update_check": _update_check(),
+        "update_check": _update_check(force=force_update_check),
     }

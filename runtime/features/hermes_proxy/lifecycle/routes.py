@@ -11,8 +11,17 @@ from .service import (
 )
 
 
-async def handle_status(_request: web.Request) -> web.Response:
-    return web.json_response(await status_response())
+def _parse_bool(value: str | None) -> bool:
+    if value is None:
+        return False
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+async def handle_status(request: web.Request) -> web.Response:
+    force = _parse_bool(request.query.get("force_update_check"))
+    return web.json_response(
+        await status_response(force_update_check=force)
+    )
 
 
 async def handle_gateway_restart(_request: web.Request) -> web.Response:
