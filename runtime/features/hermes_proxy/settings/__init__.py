@@ -7,7 +7,7 @@ share no client UI other than the options page:
 - **Models** — provider catalog, per-provider model lists, main and
   auxiliary model selection (``model_routes``).
 - **Providers** — provider credentials in the plugin's ``.env``
-  (``model_routes``'s ``/hermes/main-provider-settings`` endpoints,
+  (``model_routes``'s ``/hermes/provider-credentials`` endpoints,
   backed by ``provider_credentials_service``).
 - **Skills** — Hermes skill discovery, file browser, enable/disable
   toggle (``skills_routes``).

@@ -100,9 +100,9 @@ grep -nE '^@app\.(get|post|put|delete|patch|websocket)' \
 
 | 概念 | 官方 | 我们 | 状态 | Mine-only additive | 备注 |
 |---|---|---|---|---|---|
-| 主模型详情 | `GET /api/model/info` | `GET /hermes/model/info` | ✅ | — | adapter 仍解析 `base_url`（mine-only `/hermes/main-provider-settings` 用），handler 输出前 pop 掉 |
+| 主模型详情 | `GET /api/model/info` | `GET /hermes/model/info` | ✅ | `base_url` | mine-only `base_url` 透出，便于 UI 直接展示当前主模型的 endpoint |
 | 辅助槽位 | `GET /api/model/auxiliary` | `GET /hermes/model/auxiliary` | ✅ | — | — |
-| 写主/辅助 | `POST /api/model/set` | `POST /hermes/model/set` | ✅ | — | 这一个 endpoint 取代了旧的 `POST /hermes/main-model` + `POST /hermes/auxiliary-models`；要清 `base_url` 走 mine-only `POST /hermes/main-provider-settings` |
+| 写主/辅助 | `POST /api/model/set` | `POST /hermes/model/set` | ✅ | `base_url`（scope=main） | mine-only `base_url`：传 `null` 显式清除 `model.base_url`，省略则保持现状 |
 | 模型选项目录 | `GET /api/model/options` | `GET /hermes/model/options` | ✅ | — | 严格 delegate 给 `hermes_cli.inventory.build_models_payload`；helper 不可用时返 501（删了原 fallback 路径） |
 
 ### Status / lifecycle（4）
@@ -236,8 +236,8 @@ grep -nE '^@app\.(get|post|put|delete|patch|websocket)' \
 | | `GET /hermes/skills/{name}/file?path=` | yes | per-skill file read（路径穿越防护 + size cap） |
 | **Memory** | `GET /hermes/memories` | **yes ⭐** | upstream 完全没有，干净候选 |
 | | `GET /hermes/memories/{target}` | **yes ⭐** | 同上 |
-| Provider settings | `GET /hermes/main-provider-settings` | maybe | 把主模型 + 凭据合一查；upstream 拆 `model/info` + `env` + `providers/oauth` |
-| | `POST /hermes/main-provider-settings` | maybe | 同上写 |
+| Provider credentials | `GET /hermes/provider-credentials?provider=` | maybe | 单 provider 的 `.env` 凭据键/值（mine-only；upstream 没等价接口） |
+| | `POST /hermes/provider-credentials` | maybe | 仅写 `.env`，不动 `config.yaml: model.*` |
 | | `GET /hermes/provider-models?provider=` | maybe | 单 provider 的 model list，upstream 没单独接口 |
 | **Attachments** | `POST /hermes/attachments?session_id=&name=&mime=` | **yes ⭐** | 会话附件上传，upstream 完全没有 |
 | | `DELETE /hermes/attachments?path=` | **yes ⭐** | 删单文件 |

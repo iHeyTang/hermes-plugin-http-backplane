@@ -4,7 +4,7 @@ Sub-modules:
 - ``cron``: ``/hermes/cron/*`` — wraps Hermes's cron module
 - ``settings``: ``/hermes/model/info``, ``/hermes/model/auxiliary``,
   ``/hermes/model/options``, ``/hermes/model/set``,
-  ``/hermes/provider-models``, ``/hermes/main-provider-settings``,
+  ``/hermes/provider-models``, ``/hermes/provider-credentials``,
   ``/hermes/memories``, ``/hermes/skills``
 - ``sessions``: ``/hermes/sessions/*`` — read-only view over
   ``hermes_state.SessionDB`` (the canonical conversation log)
@@ -32,6 +32,7 @@ from . import (
     cron,
     integrations_admin,
     lifecycle,
+    logs,
     sessions,
     settings,
 )
@@ -45,3 +46,4 @@ def register(app: web.Application) -> None:
     attachments.register(app)
     integrations_admin.register(app)
     lifecycle.register(app)
+    logs.register(app)

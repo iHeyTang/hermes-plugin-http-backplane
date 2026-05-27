@@ -12,9 +12,11 @@ from __future__ import annotations
 
 from aiohttp import web
 
+from .auth import auth_middleware
 from .common import json_error
 from .dispatch import register_dispatcher
 from .features import register_native
+from .features.gateway_proxy import register as register_gateway_proxy
 from .features.hermes_proxy.attachments.routes import max_client_size_bytes
 from .features.integrations import load_all as load_integrations
 
@@ -33,17 +35,39 @@ async def cors_middleware(request: web.Request, handler):
                 resp = json_error(exc.status, exc.reason)
 
     resp.headers["Access-Control-Allow-Origin"] = "*"
-    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, PATCH, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     resp.headers["Access-Control-Max-Age"] = "86400"
     return resp
 
 
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+
+        return version("hermes-plugin-http-backplane")
+    except Exception:
+        return "unknown"
+
+
+async def _health_handler(_req: web.Request) -> web.Response:
+    return web.json_response({"ok": True, "version": _version()})
+
+
 def build_http_app() -> web.Application:
+    # Middleware stack runs outermost-first: cors wraps auth wraps the
+    # handler. That order matters — CORS headers must be added to 401
+    # responses too, otherwise the browser swallows them and the
+    # extension can't tell auth failure apart from network failure.
     app = web.Application(
-        middlewares=[cors_middleware], client_max_size=max_client_size_bytes()
+        middlewares=[cors_middleware, auth_middleware],
+        client_max_size=max_client_size_bytes(),
     )
+    # /health is exempt from auth (see runtime.auth._AUTH_EXEMPT_PATHS)
+    # so the onboarding gate can probe liveness without a key.
+    app.router.add_get("/health", _health_handler)
     register_native(app)
+    register_gateway_proxy(app)
     register_dispatcher(app)
     # Populate the integration registry from built-in presets + user
     # integrations under ~/.hermes/integrations/. Any failures inside

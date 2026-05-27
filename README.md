@@ -46,7 +46,7 @@ hermes chat
 |---|---|---|
 | `cron` | `/hermes/cron/*` | 定时任务 CRUD + 输出索引 |
 | `sessions` | `/hermes/sessions/*` | `SessionDB` 读 + mine-only 的写 |
-| `settings.model_routes` | `/hermes/model/*` + `/hermes/main-provider-settings` + `/hermes/provider-models` | 模型 / provider 配置 |
+| `settings.model_routes` | `/hermes/model/*` + `/hermes/provider-models` + `/hermes/provider-credentials` | 模型 / provider 配置 |
 | `settings.memory_routes` | `/hermes/memories*` | MEMORY.md / USER.md 视图（mine-only） |
 | `settings.skills_routes` | `/hermes/skills*` | 技能列表 / 文件浏览 / 启停 |
 | `attachments` | `/hermes/attachments*` | 会话附件上传/删除 |
