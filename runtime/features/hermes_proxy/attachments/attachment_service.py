@@ -2,8 +2,10 @@
 Attachment upload service.
 
 Owns both the request-level validation and the on-disk persistence layout
-under ``<hermes_home>/plugins/<plugin>/attachments/<session>/``. The plugin
-has no other use for attachment storage, so there is no separate adapter.
+under ``<hermes_home>/hermes-x/inbox/<session>/``. Lives under the shared
+``hermes-x/inbox`` root (not the plugin's own subtree) so every uploaded
+asset — regardless of which client surface produced it — ends up in one
+predictable place users can browse, back up, or clean out.
 """
 
 from __future__ import annotations
@@ -23,7 +25,11 @@ _SESSION_ID_SAFE_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 def _attachments_root() -> Path:
-    root = hermes_home() / "plugins" / PLUGIN_NAME / "attachments"
+    # Unified inbox under <hermes_home>/hermes-x/inbox/. Was previously
+    # nested under plugins/<plugin>/attachments/; old files there remain
+    # readable (the absolute paths stored in session history still point
+    # at them), but new uploads land here.
+    root = hermes_home() / "hermes-x" / "inbox"
     root.mkdir(parents=True, exist_ok=True)
     return root
 

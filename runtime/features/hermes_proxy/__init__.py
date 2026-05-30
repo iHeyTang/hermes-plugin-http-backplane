@@ -10,7 +10,7 @@ Sub-modules:
   ``hermes_state.SessionDB`` (the canonical conversation log)
 - ``attachments``: ``/hermes/attachments*`` — upload/delete conversation
   attachments, persisted under
-  ``<hermes_home>/plugins/hermes-plugin-http-backplane/attachments/<session>/``
+  ``<hermes_home>/hermes-x/inbox/<session>/``
 - ``integrations_admin``: ``/hermes/integrations*`` — lifecycle admin
   for ``/integrations/<name>/*``; called by the ``hermes integration``
   CLI subcommand, NOT exposed as agent tools
