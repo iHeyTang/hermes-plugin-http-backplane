@@ -34,6 +34,7 @@ from .service import (
     get_messages_response,
     get_session_response,
     list_sessions_response,
+    trigger_auto_title_response,
     update_session_response,
 )
 
@@ -182,6 +183,21 @@ async def handle_update_session(request: web.Request) -> web.Response:
     return web.json_response(payload)
 
 
+async def handle_trigger_auto_title(request: web.Request) -> web.Response:
+    session_id = request.match_info.get("session_id", "")
+    payload = trigger_auto_title_response(session_id)
+    if not payload.get("ok"):
+        err = payload.get("error", "")
+        if err == "session not found":
+            status = 404
+        elif err.startswith("title_generator unavailable"):
+            status = 501
+        else:
+            status = 503
+        return web.json_response(payload, status=status)
+    return web.json_response(payload)
+
+
 async def handle_delete_session(request: web.Request) -> web.Response:
     session_id = request.match_info.get("session_id", "")
     payload = delete_session_response(session_id)
@@ -206,6 +222,10 @@ def register(app: web.Application) -> None:
             ),
             web.post(
                 "/hermes/sessions/{session_id}/messages", handle_append_message
+            ),
+            web.post(
+                "/hermes/sessions/{session_id}/auto-title",
+                handle_trigger_auto_title,
             ),
         ]
     )

@@ -247,6 +247,17 @@ def create_session_response(body: Dict[str, Any]) -> Dict[str, Any]:
 # don't surprise users with a rename mid-conversation.
 _AUTO_TITLE_USER_MSG_LIMIT = 2
 
+# Polling parameters for the explicit ``/auto-title`` endpoint. The
+# renderer fires this the instant it sees the chat-completion ``[DONE]``
+# event, but the agent's own end-of-turn path (assistant message flush
+# + ``maybe_auto_title`` background thread) runs concurrently — on the
+# first turn of a fresh session the request can land BEFORE either has
+# reached SessionDB. Polling lets the common case converge instead of
+# returning ``no_first_exchange`` and leaving the session untitled until
+# the NEXT turn happens to surface it via ``already_titled``.
+_AUTO_TITLE_POLL_INTERVAL_S = 0.1
+_AUTO_TITLE_POLL_MAX_ATTEMPTS = 10  # ~1s total wall time
+
 
 def _content_to_text(content: Any) -> str:
     """Best-effort string projection of a SessionDB content value.
@@ -481,6 +492,108 @@ def append_message_response(session_id: str, body: Dict[str, Any]) -> Dict[str, 
         return {"ok": False, "error": _unavailable_error(exc)}
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# Trigger auto-title (sync; LLM-generated via agent.title_generator)
+# ---------------------------------------------------------------------------
+
+
+def trigger_auto_title_response(
+    session_id: str,
+    body: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Synchronously generate a session title from the first user/assistant
+    exchange via ``agent.title_generator.generate_title`` and persist it.
+
+    Returns ``{ok: True, title?: str, skipped?: bool, reason?: str}``. The
+    caller is the chat client right after a stream finishes — running the
+    LLM call synchronously keeps the wire shape simple (no polling, no
+    refresh signal) at the cost of an extra second on the response. The
+    hermes-x frontend treats this as a fire-and-forget after the assistant
+    bubble lands, so the visible latency is post-stream.
+    """
+    del body  # No options today — accepted for forward compatibility.
+
+    try:
+        from agent.title_generator import generate_title  # type: ignore
+    except Exception as exc:
+        logger.debug("title_generator import failed", exc_info=True)
+        return {"ok": False, "error": f"title_generator unavailable: {exc}"}
+
+    db, err = _open_db()
+    if db is None:
+        return {"ok": False, "error": err}
+    try:
+        sid: Optional[str] = db.resolve_session_id(session_id)
+        if not sid:
+            return {"ok": False, "error": "session not found"}
+
+        # Race-tolerant snapshot: re-read until either a title shows up
+        # (background thread won) or both first-exchange messages are
+        # present (we can generate ourselves). See poll-constants comment
+        # above for why this exists.
+        history: List[Dict[str, Any]] = []
+        user_text = ""
+        assistant_text = ""
+        for _ in range(_AUTO_TITLE_POLL_MAX_ATTEMPTS):
+            existing = db.get_session_title(sid)
+            if existing:
+                return {"ok": True, "skipped": True, "reason": "already_titled", "title": existing}
+
+            history = db.get_messages(sid)
+            # First user msg and the first assistant msg that follows it.
+            user_text = ""
+            assistant_text = ""
+            seen_user = False
+            for m in history:
+                role = m.get("role")
+                if role == "user" and not seen_user:
+                    user_text = _content_to_text(m.get("content"))
+                    seen_user = True
+                elif role == "assistant" and seen_user:
+                    assistant_text = _content_to_text(m.get("content"))
+                    if assistant_text:
+                        break
+            if user_text and assistant_text:
+                break
+
+            time.sleep(_AUTO_TITLE_POLL_INTERVAL_S)
+
+        if not user_text or not assistant_text:
+            return {"ok": True, "skipped": True, "reason": "no_first_exchange"}
+
+        user_msg_count = sum(1 for m in history if m.get("role") == "user")
+        if user_msg_count > _AUTO_TITLE_USER_MSG_LIMIT:
+            return {"ok": True, "skipped": True, "reason": "too_many_messages"}
+
+        title = generate_title(user_text, assistant_text)
+        if not title:
+            return {"ok": True, "skipped": True, "reason": "generation_failed"}
+
+        try:
+            db.set_session_title(sid, title)
+        except ValueError as exc:
+            # Hermes enforces title uniqueness; collisions are common in
+            # short demos. Report the generated title so the caller can
+            # display it locally even though we couldn't persist.
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "title_conflict",
+                "title": title,
+                "detail": str(exc),
+            }
+
+        return {"ok": True, "title": title}
+    except Exception as exc:
+        logger.exception("trigger_auto_title failed (sid=%s)", session_id)
+        return {"ok": False, "error": _unavailable_error(exc)}
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
